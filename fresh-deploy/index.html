@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Reading Catalogue</title>
+<meta name="theme-color" content="#ffffff" />
+<link rel="manifest" href="/manifest.json" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #f9f8f6;
+    --surface: #ffffff;
+    --border: #e8e4de;
+    --border-hover: #ccc9c2;
+    --text: #1a1917;
+    --muted: #6b6860;
+    --accent: #2d6a4f;
+    --accent-light: #e8f5ee;
+    --warn: #c0392b;
+    --warn-light: #fdf0ef;
+    --gold: #b5760a;
+    --gold-light: #fef8ec;
+    --blue: #1a5c8a;
+    --blue-light: #eaf3fb;
+    --radius: 10px;
+    --radius-sm: 6px;
+    --font: 'Georgia', serif;
+    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1917; --surface: #242320; --border: #3a3834;
+      --border-hover: #5a5650; --text: #f0ede8; --muted: #9a9690;
+      --accent: #4caf7d; --accent-light: #1a3028;
+      --warn: #e07070; --warn-light: #2a1a1a;
+      --gold: #d4a843; --gold-light: #2a2212;
+      --blue: #6aabdc; --blue-light: #12222e;
+    }
+  }
+  body { font-family: var(--font-ui); background: var(--bg); color: var(--text); min-height: 100vh; }
+  .container { max-width: 720px; margin: 0 auto; padding: 2rem 1rem; }
+
+  /* Header */
+  .app-header { margin-bottom: 2rem; }
+  .app-header h1 { font-family: var(--font); font-size: 26px; font-weight: normal; letter-spacing: -0.3px; margin-bottom: 4px; }
+  .app-header p { font-size: 14px; color: var(--muted); }
+
+  /* Add bar */
+  .add-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.25rem; margin-bottom: 1.5rem; }
+  .add-row { display: flex; gap: 8px; }
+  .add-row input { flex: 1; height: 42px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 12px; font-size: 14px; background: var(--bg); color: var(--text); outline: none; font-family: var(--font-ui); }
+  .add-row input:focus { border-color: var(--accent); }
+  .add-row input::placeholder { color: var(--muted); }
+  .btn-add { height: 42px; padding: 0 18px; border: none; border-radius: var(--radius-sm); background: var(--accent); color: #fff; font-size: 14px; font-family: var(--font-ui); cursor: pointer; white-space: nowrap; font-weight: 500; }
+  .btn-add:hover { opacity: 0.9; }
+  .btn-add:disabled { opacity: 0.5; cursor: not-allowed; }
+  .status-msg { margin-top: 10px; font-size: 13px; color: var(--muted); min-height: 18px; }
+  .status-msg.error { color: var(--warn); }
+  .status-msg.success { color: var(--accent); }
+
+  /* Mode toggle */
+  .mode-toggle { display: flex; gap: 0; margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; width: fit-content; }
+  .mode-btn { padding: 6px 14px; font-size: 13px; border: none; background: transparent; color: var(--muted); cursor: pointer; font-family: var(--font-ui); }
+  .mode-btn.active { background: var(--text); color: var(--bg); }
+  .mode-btn:hover:not(.active) { background: var(--border); }
+  .manual-form { display: none; flex-direction: column; gap: 8px; }
+  .manual-form.open { display: flex; }
+  .manual-form input, .manual-form textarea { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 14px; background: var(--bg); color: var(--text); outline: none; font-family: var(--font-ui); width: 100%; }
+  .manual-form input:focus, .manual-form textarea:focus { border-color: var(--accent); }
+  .manual-form input::placeholder, .manual-form textarea::placeholder { color: var(--muted); }
+  .manual-form textarea { min-height: 100px; resize: vertical; line-height: 1.5; }
+  .manual-row { display: flex; gap: 8px; }
+  .manual-row input { flex: 1; height: 38px; padding: 0 12px; }
+
+  /* Stats */
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 1.5rem; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+  .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 3px; }
+  .stat-num { font-size: 24px; font-family: var(--font); color: var(--text); }
+
+  /* Filters */
+  .filters { display: flex; gap: 6px; margin-bottom: 1.25rem; flex-wrap: wrap; }
+  .filter-pill { padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border); font-size: 13px; cursor: pointer; background: var(--surface); color: var(--muted); font-family: var(--font-ui); }
+  .filter-pill:hover { border-color: var(--border-hover); color: var(--text); }
+  .filter-pill.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+
+  /* Search */
+  .search-row { margin-bottom: 1.25rem; }
+  .search-row input { width: 100%; height: 38px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 12px 0 36px; font-size: 14px; background: var(--surface); color: var(--text); outline: none; font-family: var(--font-ui); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239a9690' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: 10px center; }
+  .search-row input:focus { border-color: var(--accent); }
+
+  /* Articles */
+  .articles { display: flex; flex-direction: column; gap: 10px; }
+  .empty { text-align: center; padding: 4rem 1rem; color: var(--muted); font-size: 15px; line-height: 1.6; }
+  .empty span { display: block; font-size: 32px; margin-bottom: 12px; }
+
+  /* Article card */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; transition: border-color 0.15s; }
+  .card:hover { border-color: var(--border-hover); }
+  .card.is-read { opacity: 0.6; }
+  .card-body { padding: 1rem 1.25rem; }
+  .card-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .source-badge { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--accent); }
+  .meta-dot { color: var(--border); font-size: 10px; }
+  .meta-text { font-size: 12px; color: var(--muted); }
+  .card-title { font-family: var(--font); font-size: 17px; font-weight: normal; line-height: 1.4; color: var(--text); margin-bottom: 6px; cursor: pointer; }
+  .card-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .card-excerpt { font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; }
+  .badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; border: 1px solid; font-family: var(--font-ui); }
+  .badge-unread { color: var(--blue); border-color: var(--blue); background: var(--blue-light); }
+  .badge-read { color: var(--accent); border-color: var(--accent); background: var(--accent-light); }
+  .badge-fav { color: var(--gold); border-color: var(--gold); background: var(--gold-light); }
+  .badge-offline { color: var(--muted); border-color: var(--border); background: var(--bg); }
+  .card-actions { display: flex; gap: 4px; }
+  .action-btn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 15px; color: var(--muted); font-family: var(--font-ui); }
+  .action-btn:hover { border-color: var(--border-hover); color: var(--text); background: var(--bg); }
+  .action-btn.fav-on { color: var(--gold); border-color: var(--gold); background: var(--gold-light); }
+  .action-btn.read-on { color: var(--accent); border-color: var(--accent); background: var(--accent-light); }
+
+  /* Read mode */
+  .read-panel { display: none; border-top: 1px solid var(--border); background: var(--bg); }
+  .read-panel.open { display: block; }
+  .read-panel-inner { padding: 1.5rem 1.25rem; max-height: 480px; overflow-y: auto; }
+  .read-panel-inner h2 { font-family: var(--font); font-size: 20px; font-weight: normal; margin-bottom: 1rem; line-height: 1.4; }
+  .article-body { font-family: var(--font); font-size: 16px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
+  .read-bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 1.25rem; border-top: 1px solid var(--border); background: var(--surface); }
+  .read-bar a { font-size: 13px; color: var(--accent); text-decoration: none; }
+  .read-bar a:hover { text-decoration: underline; }
+  .read-bar span { font-size: 12px; color: var(--muted); }
+  .btn-close-read { background: none; border: none; cursor: pointer; font-size: 13px; color: var(--muted); padding: 4px 8px; border-radius: var(--radius-sm); font-family: var(--font-ui); }
+  .btn-close-read:hover { color: var(--text); background: var(--border); }
+
+  /* Offline banner */
+  .offline-banner { background: var(--warn-light); border: 1px solid var(--warn); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 13px; color: var(--warn); margin-bottom: 1rem; display: none; }
+  .offline-banner.show { display: block; }
+
+  @media (max-width: 500px) {
+    .add-row { flex-direction: column; }
+    .btn-add { height: 42px; }
+    .stats { grid-template-columns: repeat(3,1fr); gap: 6px; }
+    .stat-num { font-size: 20px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="offline-banner" id="offline-banner">
+    You are offline — showing saved articles only.
+  </div>
+
+  <div class="app-header">
+    <h1>Reading Catalogue</h1>
+    <p>Paste any article link to save, catalogue, and read offline</p>
+  </div>
+
+  <div class="add-section">
+    <div class="mode-toggle">
+      <button class="mode-btn active" id="mode-url" onclick="switchMode('url')">Article URL</button>
+      <button class="mode-btn" id="mode-manual" onclick="switchMode('manual')">Post / Tweet</button>
+    </div>
+
+    <!-- URL mode -->
+    <div id="url-mode">
+      <div class="add-row">
+        <input type="url" id="url-input" placeholder="Paste article URL here…" autocomplete="off" />
+        <button class="btn-add" id="add-btn">Save article</button>
+      </div>
+    </div>
+
+    <!-- Manual entry mode -->
+    <div class="manual-form" id="manual-mode">
+      <textarea id="m-text" placeholder="Paste the tweet or post text here…"></textarea>
+      <div class="manual-row">
+        <input type="text" id="m-author" placeholder="Author / @handle" />
+        <input type="text" id="m-source" placeholder="Source (e.g. X, LinkedIn)" />
+      </div>
+      <div class="manual-row">
+        <input type="text" id="m-title" placeholder="Title or topic (optional)" />
+        <input type="url" id="m-url" placeholder="Link to original post (optional)" />
+      </div>
+      <button class="btn-add" id="manual-add-btn" style="width:100%">Save post</button>
+    </div>
+
+    <div class="status-msg" id="status-msg"></div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Saved</div><div class="stat-num" id="s-total">0</div></div>
+    <div class="stat"><div class="stat-label">Unread</div><div class="stat-num" id="s-unread">0</div></div>
+    <div class="stat"><div class="stat-label">Favorites</div><div class="stat-num" id="s-fav">0</div></div>
+  </div>
+
+  <div class="search-row">
+    <input type="search" id="search-input" placeholder="Search saved articles…" />
+  </div>
+
+  <div class="filters">
+    <button class="filter-pill active" data-f="all">All</button>
+    <button class="filter-pill" data-f="unread">Unread</button>
+    <button class="filter-pill" data-f="favorites">Favorites</button>
+    <button class="filter-pill" data-f="read">Read</button>
+  </div>
+
+  <div class="articles" id="articles"></div>
+</div>
+
+<script>
+const STORE = 'rc_articles_v2';
+let articles = [];
+let activeFilter = 'all';
+let searchQuery = '';
+let openCard = null;
+
+function loadArticles() {
+  try { articles = JSON.parse(localStorage.getItem(STORE)) || []; } catch { articles = []; }
+}
+function saveArticles() {
+  localStorage.setItem(STORE, JSON.stringify(articles));
+}
+function getDomain(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+}
+function readTime(text) {
+  return Math.max(1, Math.round((text || '').split(/\s+/).length / 220)) + ' min read';
+}
+function fmtDate(iso) {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return ''; }
+}
+function setStatus(msg, type='') {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.className = 'status-msg' + (type ? ' ' + type : '');
+}
+function updateStats() {
+  document.getElementById('s-total').textContent = articles.length;
+  document.getElementById('s-unread').textContent = articles.filter(a => !a.read).length;
+  document.getElementById('s-fav').textContent = articles.filter(a => a.fav).length;
+}
+
+async function addArticle() {
+  var url = document.getElementById('url-input').value.trim();
+  if (!url.startsWith('http')) { setStatus('Please enter a valid URL starting with http', 'error'); return; }
+  if (articles.find(function(a) { return a.url === url; })) { setStatus('This URL is already saved.', 'error'); return; }
+  var btn = document.getElementById('add-btn');
+  btn.disabled = true;
+  setStatus('Fetching article...');
+  try {
+    var jinaRes = await fetch('https://r.jina.ai/' + url, {
+      headers: { 'Accept': 'text/plain', 'X-Timeout': '20' }
+    });
+    if (!jinaRes.ok) throw new Error('Could not fetch');
+    var raw = await jinaRes.text();
+    var lines = raw.split('
+');
+    var title = '', date = '', author = '', bodyStart = 0;
+    for (var i = 0; i < Math.min(lines.length, 25); i++) {
+      if (lines[i].startsWith('Title:')) title = lines[i].replace('Title:', '').trim();
+      else if (lines[i].startsWith('Published Time:')) date = lines[i].replace('Published Time:', '').trim();
+      else if (lines[i].startsWith('Author:')) author = lines[i].replace('Author:', '').trim();
+      else if (lines[i].match(/^(Markdown Content|Content):/)) { bodyStart = i + 1; break; }
+    }
+    if (bodyStart === 0) {
+      for (var j = 0; j < Math.min(lines.length, 10); j++) {
+        if (lines[j].startsWith('#')) { if (!title) title = lines[j].replace(/^#+\s*/, '').trim(); bodyStart = j + 1; break; }
+      }
+    }
+    var bodyLines = lines.slice(bodyStart).map(function(l) {
+      return l.replace(/^#{1,6}\s+/, '').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/^[-*+]\s+/, '');
+    });
+    var text = bodyLines.join('\n').replace(/\n{4,}/g, '\n\n\n').trim();
+    var excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim() + '...';
+    if (!text || text.length < 50) throw new Error('No text extracted');
+    var article = {
+      id: Date.now(), url: url,
+      title: title || 'Untitled',
+      source: getDomain(url),
+      author: author || '',
+      date: date || '',
+      excerpt: excerpt,
+      text: text,
+      readTime: readTime(text),
+      savedAt: new Date().toISOString(),
+      read: false, fav: false
+    };
+    articles.unshift(article);
+    saveArticles();
+    document.getElementById('url-input').value = '';
+    setStatus('Article saved!', 'success');
+    setTimeout(function() { setStatus(''); }, 3000);
+    render();
+  } catch (err) {
+    setStatus('Could not fetch this article. The site may block automated access.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function toggleRead(id) {
+  const a = articles.find(x => x.id === id);
+  if (a) { a.read = !a.read; saveArticles(); render(); }
+}
+function toggleFav(id) {
+  const a = articles.find(x => x.id === id);
+  if (a) { a.fav = !a.fav; saveArticles(); render(); }
+}
+function deleteArticle(id) {
+  if (!confirm('Remove this article?')) return;
+  articles = articles.filter(x => x.id !== id);
+  if (openCard === id) openCard = null;
+  saveArticles(); render();
+}
+function toggleOpen(id) {
+  openCard = openCard === id ? null : id;
+  render();
+}
+
+function openLink(url) {
+  window.open(url, '_blank', 'noopener');
+}
+
+function render() {
+  updateStats();
+  let list = articles;
+  if (activeFilter === 'unread') list = list.filter(a => !a.read);
+  else if (activeFilter === 'favorites') list = list.filter(a => a.fav);
+  else if (activeFilter === 'read') list = list.filter(a => a.read);
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    list = list.filter(a =>
+      (a.title||'').toLowerCase().includes(q) ||
+      (a.source||'').toLowerCase().includes(q) ||
+      (a.author||'').toLowerCase().includes(q) ||
+      (a.excerpt||'').toLowerCase().includes(q)
+    );
+  }
+  const container = document.getElementById('articles');
+  if (!list.length) {
+    container.innerHTML = `<div class="empty"><span>📚</span>${articles.length === 0 ? 'No articles yet.<br>Paste a URL above to get started.' : 'No articles match this filter.'}</div>`;
+    return;
+  }
+
+  container.innerHTML = list.map(a => {
+    const isOpen = openCard === a.id;
+    const hasText = !!(a.text && a.text.length > 50);
+    return `
+<div class="card ${a.read ? 'is-read' : ''}" id="card-${a.id}">
+  <div class="card-body">
+    <div class="card-meta">
+      <span class="source-badge">${escHtml(a.source)}</span>
+      ${a.author ? `<span class="meta-dot">·</span><span class="meta-text">${escHtml(a.author)}</span>` : ''}
+      ${a.date ? `<span class="meta-dot">·</span><span class="meta-text">${fmtDate(a.date)}</span>` : ''}
+      <span class="meta-dot">·</span><span class="meta-text">${a.readTime}</span>
+    </div>
+    <div class="card-title" onclick="toggleOpen(${a.id})">${escHtml(a.title)}</div>
+    <div class="card-excerpt">${escHtml(a.excerpt)}</div>
+    <div class="card-footer">
+      <div class="badges">
+        <span class="badge ${a.read ? 'badge-read' : 'badge-unread'}">${a.read ? 'Read' : 'Unread'}</span>
+        ${a.fav ? '<span class="badge badge-fav">★ Favorite</span>' : ''}
+        ${a.isManual ? '<span class="badge" style="color:#1a8cd8;border-color:#1a8cd8;background:#e8f4fd">Post</span>' : (hasText ? '<span class="badge badge-offline">Offline saved</span>' : '')}
+      </div>
+      <div class="card-actions">
+        <button class="action-btn ${a.fav ? 'fav-on' : ''}" title="Favorite" onclick="toggleFav(${a.id})">★</button>
+        <button class="action-btn ${a.read ? 'read-on' : ''}" title="Mark read" onclick="toggleRead(${a.id})">✓</button>
+        <button class="action-btn" title="Open original URL" onclick="openLink('${escAttr(a.url)}')">↗</button>
+        <button class="action-btn" title="Delete" onclick="deleteArticle(${a.id})" style="font-size:13px">✕</button>
+      </div>
+    </div>
+  </div>
+  ${isOpen && hasText ? `
+  <div class="read-panel open">
+    <div class="read-panel-inner">
+      <h2>${escHtml(a.title)}</h2>
+      <div class="article-body">${escHtml(a.text)}</div>
+    </div>
+    <div class="read-bar">
+      <a href="${escAttr(a.url)}" target="_blank" rel="noopener">Open original ↗</a>
+      <span>Saved ${fmtDate(a.savedAt)}</span>
+      <button class="btn-close-read" onclick="toggleOpen(${a.id})">Close ✕</button>
+    </div>
+  </div>` : ''}
+  ${isOpen && !hasText ? `<div class="read-panel open"><div class="read-panel-inner" style="text-align:center;color:var(--muted);padding:2rem">No text was saved for this article.</div></div>` : ''}
+</div>`;
+  }).join('');
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) {
+  return String(s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function switchMode(mode) {
+  const isUrl = mode === 'url';
+  document.getElementById('url-mode').style.display = isUrl ? 'block' : 'none';
+  document.getElementById('manual-mode').classList.toggle('open', !isUrl);
+  document.getElementById('mode-url').classList.toggle('active', isUrl);
+  document.getElementById('mode-manual').classList.toggle('active', !isUrl);
+}
+
+function addManualEntry() {
+  const text = document.getElementById('m-text').value.trim();
+  if (!text) { setStatus('Please enter some text.', 'error'); return; }
+  const author = document.getElementById('m-author').value.trim();
+  const source = document.getElementById('m-source').value.trim() || 'X / Twitter';
+  const title = document.getElementById('m-title').value.trim()
+    || (author ? author + ' on ' + source : 'Post on ' + source);
+  const url = document.getElementById('m-url').value.trim();
+  const words = text.split(' ').length;
+  const excerpt = text.slice(0, 220) + (text.length > 220 ? '...' : '');
+
+  const article = {
+    id: Date.now(),
+    url: url || '',
+    title,
+    source,
+    author,
+    date: new Date().toISOString(),
+    excerpt,
+    text,
+    readTime: Math.max(1, Math.round(words / 220)) + ' min read',
+    savedAt: new Date().toISOString(),
+    read: false,
+    fav: false,
+    isManual: true
+  };
+
+  articles.unshift(article);
+  saveArticles();
+  ['m-text','m-author','m-source','m-title','m-url'].forEach(function(id) {
+    document.getElementById(id).value = '';
+  });
+  setStatus('Post saved!', 'success');
+  setTimeout(function() { setStatus(''); }, 3000);
+  render();
+}
+
+// Events
+document.getElementById('add-btn').addEventListener('click', addArticle);
+document.getElementById('url-input').addEventListener('keydown', e => { if (e.key === 'Enter') addArticle(); });
+document.getElementById('manual-add-btn').addEventListener('click', addManualEntry);
+document.querySelectorAll('.filter-pill').forEach(p => {
+  p.addEventListener('click', () => {
+    document.querySelectorAll('.filter-pill').forEach(x => x.classList.remove('active'));
+    p.classList.add('active');
+    activeFilter = p.dataset.f;
+    render();
+  });
+});
+document.getElementById('search-input').addEventListener('input', e => {
+  searchQuery = e.target.value;
+  render();
+});
+
+// Offline detection
+function updateOnlineStatus() {
+  document.getElementById('offline-banner').classList.toggle('show', !navigator.onLine);
+}
+window.addEventListener('online', updateOnlineStatus);
+window.addEventListener('offline', updateOnlineStatus);
+updateOnlineStatus();
+
+// Service worker for offline app shell
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+loadArticles();
+render();
+</script>
+</body>
+</html>

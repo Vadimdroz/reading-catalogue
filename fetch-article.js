@@ -1,0 +1,236 @@
+const https = require('https');
+const http = require('http');
+const { URL } = require('url');
+
+function decodeHtmlEntities(str) {
+  return String(str || '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+}
+
+function extractFromHtml(html) {
+  // Title — try multiple meta sources
+  const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']{1,200})["']/i);
+  const twTitle = html.match(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']{1,200})["']/i);
+  const htmlTitle = html.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
+  const title = decodeHtmlEntities(
+    (ogTitle && ogTitle[1]) || (twTitle && twTitle[1]) || (htmlTitle && htmlTitle[1]) || 'Untitled'
+  ).trim();
+
+  // Author
+  const authorMatch = html.match(/<meta[^>]+name=["']author["'][^>]+content=["']([^"']{1,100})["']/i)
+    || html.match(/<meta[^>]+property=["']article:author["'][^>]+content=["']([^"']{1,100})["']/i);
+  const author = authorMatch ? decodeHtmlEntities(authorMatch[1]).trim() : '';
+
+  // Date
+  const dateMatch = html.match(/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i)
+    || html.match(/<time[^>]+datetime=["']([^"']+)["']/i)
+    || html.match(/<meta[^>]+name=["']date["'][^>]+content=["']([^"']+)["']/i);
+  const date = dateMatch ? dateMatch[1].trim() : '';
+
+  // Strip noise
+  let body = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+    .replace(/<header[\s\S]*?<\/header>/gi, '')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+    .replace(/<aside[\s\S]*?<\/aside>/gi, '')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+
+  // Try to find main content block — broader set of patterns
+  const contentPatterns = [
+    /<article[^>]*>([\s\S]*?)<\/article>/i,
+    /<div[^>]+(?:class|id)=["'][^"']*(?:article-body|article-content|articleBody|post-content|post-body|entry-content|story-body|story-content|main-content|page-content|content-body|article-text)[^"']*["'][^>]*>([\s\S]*?)<\/div>/i,
+    /<main[^>]*>([\s\S]*?)<\/main>/i,
+    /<div[^>]+(?:class|id)=["'][^"']*(?:content|article|post|entry|story|body|text)[^"']*["'][^>]*>([\s\S]{500,}?)<\/div>/i,
+  ];
+
+  let content = body;
+  for (const pattern of contentPatterns) {
+    const m = body.match(pattern);
+    if (m) { content = m[1] || m[0]; break; }
+  }
+
+  // Convert to readable text
+  let text = content
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<h[1-6][^>]*>/gi, '\n\n')
+    .replace(/<\/h[1-6]>/gi, '\n\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/blockquote>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/[ \t]{3,}/g, ' ')
+    .replace(/\n{4,}/g, '\n\n\n')
+    .trim();
+
+  text = decodeHtmlEntities(text);
+
+  // Remove very short lines (nav fragments, button labels etc)
+  text = text.split('\n')
+    .filter(line => line.trim().length === 0 || line.trim().length > 20)
+    .join('\n')
+    .replace(/\n{4,}/g, '\n\n\n')
+    .trim();
+
+  if (text.length > 15000) text = text.slice(0, 15000) + '\n\n[Article truncated]';
+
+  const excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim()
+    + (text.length > 220 ? '…' : '');
+
+  return { title, author, date, text, excerpt };
+}
+
+function fetchUrl(urlStr, redirectCount = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirectCount > 6) return reject(new Error('Too many redirects'));
+    let parsed;
+    try { parsed = new URL(urlStr); } catch { return reject(new Error('Invalid URL')); }
+
+    const lib = parsed.protocol === 'https:' ? https : http;
+    const options = {
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+      path: parsed.pathname + (parsed.search || ''),
+      method: 'GET',
+      headers: {
+        // Realistic browser user-agent — many sites block non-browser agents
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'he,en-US;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'identity',
+        'Cache-Control': 'no-cache',
+        'Upgrade-Insecure-Requests': '1',
+      },
+      timeout: 15000
+    };
+
+    const req = lib.request(options, res => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+        const loc = res.headers.location;
+        const next = loc.startsWith('http') ? loc : `${parsed.protocol}//${parsed.hostname}${loc}`;
+        res.resume();
+        return resolve(fetchUrl(next, redirectCount + 1));
+      }
+      if (res.statusCode === 403) return reject(new Error('Site blocked access (403)'));
+      if (res.statusCode === 429) return reject(new Error('Rate limited by site (429)'));
+      if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        // Detect encoding from content-type header or meta tag
+        const ct = res.headers['content-type'] || '';
+        const isUtf8 = ct.includes('utf-8') || ct.includes('utf8');
+        const html = buf.toString(isUtf8 ? 'utf8' : 'latin1');
+        // Check for charset in meta tag
+        const charsetMatch = html.match(/<meta[^>]+charset=["']?([^"'\s;>]+)/i);
+        const charset = charsetMatch ? charsetMatch[1].toLowerCase() : 'utf-8';
+        if (charset.includes('utf') || isUtf8) {
+          resolve(buf.toString('utf8'));
+        } else if (charset.includes('1255') || charset.includes('windows-1255')) {
+          // Windows-1255 is common on Israeli Hebrew sites
+          resolve(buf.toString('latin1'));
+        } else {
+          resolve(buf.toString('utf8'));
+        }
+      });
+      res.on('error', reject);
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timed out')); });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// Fallback: try fetching via a public read-it-later compatible proxy
+async function fetchViaProxy(url) {
+  const proxyUrl = `https://r.jina.ai/${url}`;
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(proxyUrl);
+    const options = {
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'text/plain, text/html',
+        'X-Return-Format': 'text',
+      },
+      timeout: 20000
+    };
+    const req = https.request(options, res => {
+      if (res.statusCode !== 200) return reject(new Error(`Proxy HTTP ${res.statusCode}`));
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      res.on('error', reject);
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('Proxy timeout')); });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+exports.handler = async function(event) {
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, body: 'Method not allowed' };
+  }
+
+  let url;
+  try {
+    ({ url } = JSON.parse(event.body || '{}'));
+    if (!url || !url.startsWith('http')) throw new Error('bad url');
+  } catch {
+    return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request' }) };
+  }
+
+  // Strategy 1: fetch directly
+  try {
+    const html = await fetchUrl(url);
+    const data = extractFromHtml(html);
+
+    // If we got a title but almost no text, fall through to proxy
+    if (data.text && data.text.length > 200) {
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      };
+    }
+    throw new Error('Insufficient text extracted, trying proxy');
+  } catch (err1) {
+    // Strategy 2: use Jina Reader as a proxy (free, no key needed)
+    // Jina fetches the page, renders JS, and returns clean text
+    try {
+      const proxyText = await fetchViaProxy(url);
+
+      // Jina returns markdown-ish plain text — extract title from first line
+      const lines = proxyText.split('\n').filter(l => l.trim());
+      const title = lines[0] ? lines[0].replace(/^#+\s*/, '').trim() : 'Untitled';
+      const text = lines.slice(1).join('\n').trim();
+      const excerpt = text.replace(/\n+/g, ' ').slice(0, 220).trim() + '…';
+
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, author: '', date: '', text, excerpt })
+      };
+    } catch (err2) {
+      return {
+        statusCode: 502,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: `Could not fetch article. Direct: ${err1.message}. Proxy: ${err2.message}`
+        })
+      };
+    }
+  }
+};
