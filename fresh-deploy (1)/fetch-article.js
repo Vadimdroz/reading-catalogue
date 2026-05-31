@@ -10,11 +10,6 @@ export async function onRequestPost(context) {
     });
   }
 
-  // ThreadReaderApp: go straight to Jina (clean markdown, no HTML parsing mess)
-  if (isThreadReaderUrl(url)) {
-    return await fetchThreadReaderViaJina(url);
-  }
-
   // Strategy 1: fetch directly with realistic browser headers
   try {
     const res = await fetch(url, {
@@ -28,7 +23,7 @@ export async function onRequestPost(context) {
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
-    const data = extractFromHtml(html);
+    const data = isThreadReaderUrl(url) ? extractThreadReader(html, url) : extractFromHtml(html);
 
     if (data.text && data.text.length > 300) {
       return new Response(JSON.stringify(data), {
@@ -106,53 +101,63 @@ function isThreadReaderUrl(url) {
   return /threadreaderapp\.com\/thread\//i.test(url);
 }
 
-async function fetchThreadReaderViaJina(url) {
+function extractThreadReader(html, url) {
   const threadIdMatch = url.match(/\/thread\/(\d+)/);
   const threadId = threadIdMatch ? threadIdMatch[1] : '';
 
-  try {
-    const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Accept': 'text/plain, */*',
-        'X-No-Cache': 'true',
-        'X-Timeout': '25',
-      }
-    });
-    if (!jinaRes.ok) throw new Error(`Jina HTTP ${jinaRes.status}`);
-    const raw = await jinaRes.text();
-    const data = parseJinaResponse(raw);
+  // Handle from first /user/ link
+  const handleMatch = html.match(/<a[^>]+href=["']\/user\/([^"'\s\/]+)["']/i);
+  const handle = handleMatch ? handleMatch[1] : '';
 
-    if (!data.text || data.text.length < 100) throw new Error('insufficient text');
+  // Display name from h3/h4 wrapping the /user/ link
+  const displayNameMatch = html.match(/<h[34][^>]*>[\s\S]*?<a[^>]+href=["']\/user\/[^"']+["'][^>]*>([\s\S]*?)<\/a>/i);
+  const displayName = displayNameMatch
+    ? decodeHtmlEntities(displayNameMatch[1].replace(/<[^>]+>/g, '').trim())
+    : '';
 
-    // Extract handle from title "Thread by @handle" or author field
-    const handleMatch = (data.title + ' ' + data.author).match(/@([A-Za-z0-9_]+)/);
-    const handle = handleMatch ? handleMatch[1] : '';
+  const tweetUrl = handle && threadId
+    ? `https://twitter.com/${handle}/status/${threadId}` : '';
 
-    const tweetUrl = handle && threadId
-      ? `https://twitter.com/${handle}/status/${threadId}`
-      : '';
+  // Title from og:title, strip the site suffix
+  const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+  const pageTitle = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  let title = decodeHtmlEntities(
+    (ogTitle && ogTitle[1]) || (pageTitle && pageTitle[1]) || ''
+  ).replace(/\s*on Thread Reader App\s*/i, '').trim() || (handle ? `Thread by @${handle}` : 'Twitter Thread');
 
-    let title = (data.title || '').replace(/\s*on Thread Reader App\s*/i, '').trim();
-    if (!title) title = handle ? `Thread by @${handle}` : 'Twitter Thread';
+  // Strip noise + ThreadReaderApp tweet anchor tags (source of the junk attribute text)
+  let body = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+    .replace(/<header[\s\S]*?<\/header>/gi, '')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+    .replace(/<aside[\s\S]*?<\/aside>/gi, '')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<a[^>]*\bdata-tweet\b[^>]*>[\s\S]*?<\/a>/gi, '')
+    .replace(/<a[^>]*\bdata-screenname\b[^>]*>/gi, '');
 
-    // If title is still just "Thread by @handle", use first content line instead
-    if (/^Thread by @/i.test(title)) {
-      const firstLine = data.text.split('\n').find(l => l.trim().length > 20);
-      if (firstLine) title = firstLine.trim().slice(0, 100) + (firstLine.length > 100 ? '…' : '');
-    }
+  // Extract all paragraphs
+  const paragraphs = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
+    .map(m => decodeHtmlEntities(m[1].replace(/<[^>]+>/g, '').trim()))
+    .filter(p => p.length > 30 && !p.includes('data-tweet=') && !p.includes('data-screenname='));
 
-    const author = data.author || (handle ? `@${handle}` : '');
+  let text = paragraphs.join('\n\n');
+  if (!text || text.length < 100) return extractFromHtml(html);
 
-    return new Response(JSON.stringify({
-      ...data, title, author, tweetUrl, isThread: true
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-
-  } catch (err) {
-    return new Response(JSON.stringify({
-      error: `Could not fetch thread: ${err.message}`
-    }), { status: 502, headers: { 'Content-Type': 'application/json' } });
+  // Use first paragraph as title if title is still generic
+  if (/^Thread by @/i.test(title)) {
+    const firstLine = text.split('\n').find(l => l.trim().length > 20);
+    if (firstLine) title = firstLine.trim().slice(0, 100) + (firstLine.length > 100 ? '…' : '');
   }
+
+  text = cleanText(text);
+  const author = displayName ? `${displayName} (@${handle})` : handle ? `@${handle}` : '';
+  const excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim() + '…';
+
+  return { title, author, date: '', text, excerpt, tweetUrl, isThread: true };
 }
 
 function extractFromHtml(html) {
