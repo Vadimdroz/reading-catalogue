@@ -301,7 +301,20 @@ let _auth, _db, _uid = null;
   } catch(e) { console.warn('Firebase init failed:', e); }
 })();
 
-function signIn()  { if (_auth) _auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider()).catch(e => setStatus(e.message, 'error')); }
+function signIn() {
+  if (!_auth) return;
+  const provider = new firebase.auth.GoogleAuthProvider();
+  // iOS PWA (standalone): signInWithRedirect sends the user to Safari and never comes back.
+  // signInWithPopup opens a Safari sheet that correctly returns to the app.
+  // For all other cases (regular mobile browser, desktop) redirect is more reliable.
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+  if (isIOS && isStandalone) {
+    _auth.signInWithPopup(provider).catch(e => setStatus(e.message, 'error'));
+  } else {
+    _auth.signInWithRedirect(provider).catch(e => setStatus(e.message, 'error'));
+  }
+}
 function signOut() { if (_auth) _auth.signOut(); }
 
 function setSyncState(syncing) {
