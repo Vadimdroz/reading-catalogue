@@ -6,6 +6,9 @@
 <title>Reading Catalogue</title>
 <meta name="theme-color" content="#ffffff" />
 <link rel="manifest" href="/manifest.json" />
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -163,6 +166,24 @@
     .stats { grid-template-columns: repeat(3,1fr); gap: 6px; }
     .stat-num { font-size: 20px; }
   }
+
+  /* Auth overlay */
+  .auth-overlay { display:none; position:fixed; inset:0; background:var(--bg); z-index:9999; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:24px; }
+  .auth-overlay.show { display:flex; }
+  .auth-overlay h2 { font-family:var(--font); font-size:22px; font-weight:normal; }
+  .auth-overlay p { font-size:14px; color:var(--muted); text-align:center; max-width:300px; }
+  .btn-google { display:flex; align-items:center; gap:10px; padding:12px 22px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface); color:var(--text); font-size:15px; font-family:var(--font-ui); cursor:pointer; font-weight:500; }
+  .btn-google:hover { border-color:var(--border-hover); }
+  .btn-google svg { width:18px; height:18px; flex-shrink:0; }
+
+  /* User row in header */
+  .header-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
+  .user-row { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+  .btn-signout { font-size:12px; color:var(--muted); background:none; border:1px solid var(--border); border-radius:var(--radius-sm); padding:3px 9px; cursor:pointer; font-family:var(--font-ui); }
+  .btn-signout:hover { color:var(--text); border-color:var(--border-hover); }
+  .sync-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); display:inline-block; }
+  .sync-dot.syncing { background:var(--gold); animation:pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 </style>
 </head>
 <body>
@@ -183,6 +204,16 @@
   </div>
 </div>
 
+<!-- Auth overlay -->
+<div class="auth-overlay" id="authOverlay">
+  <h2>Reading Catalogue</h2>
+  <p>Sign in to sync your reading list across all your devices.</p>
+  <button class="btn-google" onclick="signIn()">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+    Sign in with Google
+  </button>
+</div>
+
 <div class="container">
 
   <div class="offline-banner" id="offline-banner">
@@ -190,7 +221,14 @@
   </div>
 
   <div class="app-header">
-    <h1>Reading Catalogue</h1>
+    <div class="header-row">
+      <h1>Reading Catalogue</h1>
+      <div class="user-row" id="userRow" style="display:none">
+        <span class="sync-dot" id="syncDot"></span>
+        <span id="userName"></span>
+        <button class="btn-signout" onclick="signOut()">Sign out</button>
+      </div>
+    </div>
     <p>Paste any article link to save, catalogue, and read offline</p>
   </div>
 
@@ -246,6 +284,73 @@
 </div>
 
 <script>
+// ─── Firebase ──────────────────────────────────────────────────────────────────
+let _auth, _db, _uid = null;
+(function initFirebase() {
+  try {
+    firebase.initializeApp({
+      apiKey: "AIzaSyDoEUHFnak4_ZxC252g2pdcZZI075Ty4qY",
+      authDomain: "wishlist-app-5ca53.firebaseapp.com",
+      projectId: "wishlist-app-5ca53",
+      storageBucket: "wishlist-app-5ca53.firebasestorage.app",
+      messagingSenderId: "87452439023",
+      appId: "1:87452439023:web:8e640c3803620f93e8e61a"
+    });
+    _auth = firebase.auth();
+    _db   = firebase.firestore();
+  } catch(e) { console.warn('Firebase init failed:', e); }
+})();
+
+function signIn()  { if (_auth) _auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(e => setStatus(e.message, 'error')); }
+function signOut() { if (_auth) _auth.signOut(); }
+
+function setSyncState(syncing) {
+  const dot = document.getElementById('syncDot');
+  if (dot) dot.className = 'sync-dot' + (syncing ? ' syncing' : '');
+}
+
+// Save a single article to Firestore
+async function pushArticle(article) {
+  if (!_uid || !_db) return;
+  try {
+    await _db.collection('users').doc(_uid).collection('articles').doc(String(article.id)).set(article);
+  } catch(e) { console.warn('Firestore write failed:', e); }
+}
+
+// Delete a single article from Firestore
+async function deleteArticleFirestore(id) {
+  if (!_uid || !_db) return;
+  try {
+    await _db.collection('users').doc(_uid).collection('articles').doc(String(id)).delete();
+  } catch(e) { console.warn('Firestore delete failed:', e); }
+}
+
+// On sign-in: fetch all Firestore articles and merge with local
+async function syncFromFirestore() {
+  if (!_uid || !_db) return;
+  setSyncState(true);
+  try {
+    const snap = await _db.collection('users').doc(_uid).collection('articles').get();
+    const remote = snap.docs.map(d => d.data());
+    // Merge: build map by id, remote wins for read/fav state, local wins for text content
+    const map = {};
+    articles.forEach(a => { map[a.id] = a; });
+    remote.forEach(r => {
+      if (map[r.id]) {
+        // Keep local text if remote lost it; take latest read/fav state
+        map[r.id] = { ...r, text: map[r.id].text || r.text || '' };
+      } else {
+        map[r.id] = r;
+      }
+    });
+    articles = Object.values(map).sort((a, b) => b.id - a.id);
+    saveArticles();
+    render();
+  } catch(e) { console.warn('Firestore read failed:', e); }
+  setSyncState(false);
+}
+
+// ─── Storage ───────────────────────────────────────────────────────────────────
 const STORE = 'rc_articles_v2';
 let articles = [];
 let activeFilter = 'all';
@@ -309,6 +414,7 @@ async function addArticle() {
     };
     articles.unshift(article);
     saveArticles();
+    pushArticle(article);
     document.getElementById('url-input').value = '';
     setStatus('Article saved!', 'success');
     setTimeout(function() { setStatus(''); }, 3000);
@@ -322,17 +428,19 @@ async function addArticle() {
 
 function toggleRead(id) {
   const a = articles.find(x => x.id === id);
-  if (a) { a.read = !a.read; saveArticles(); render(); }
+  if (a) { a.read = !a.read; saveArticles(); pushArticle(a); render(); }
 }
 function toggleFav(id) {
   const a = articles.find(x => x.id === id);
-  if (a) { a.fav = !a.fav; saveArticles(); render(); }
+  if (a) { a.fav = !a.fav; saveArticles(); pushArticle(a); render(); }
 }
 function deleteArticle(id) {
   if (!confirm('Remove this article?')) return;
   articles = articles.filter(x => x.id !== id);
   if (openCard === id) openCard = null;
-  saveArticles(); render();
+  saveArticles();
+  deleteArticleFirestore(id);
+  render();
 }
 function toggleOpen(id) {
   openCard = openCard === id ? null : id;
@@ -474,6 +582,7 @@ function addManualEntry() {
 
   articles.unshift(article);
   saveArticles();
+  pushArticle(article);
   ['m-text','m-author','m-source','m-title','m-url'].forEach(function(id) {
     document.getElementById(id).value = '';
   });
@@ -513,8 +622,31 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 
+// Auth state
 loadArticles();
 render();
+
+if (_auth) {
+  document.getElementById('authOverlay').classList.add('show');
+  _auth.onAuthStateChanged(async user => {
+    if (user) {
+      _uid = user.uid;
+      document.getElementById('authOverlay').classList.remove('show');
+      const userRow = document.getElementById('userRow');
+      if (userRow) {
+        userRow.style.display = 'flex';
+        const nameEl = document.getElementById('userName');
+        if (nameEl) nameEl.textContent = user.displayName || user.email || '';
+      }
+      await syncFromFirestore();
+    } else {
+      _uid = null;
+      document.getElementById('authOverlay').classList.add('show');
+      const userRow = document.getElementById('userRow');
+      if (userRow) userRow.style.display = 'none';
+    }
+  });
+}
 </script>
 </body>
 </html>
