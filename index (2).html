@@ -420,7 +420,7 @@ async function addArticle() {
     var article = {
       id: Date.now(), url: url,
       title: data.title || 'Untitled',
-      source: getDomain(url),
+      source: data.isThread ? 'X / Twitter' : getDomain(url),
       author: data.author || '',
       date: data.date || '',
       excerpt: data.excerpt || '',
@@ -429,6 +429,7 @@ async function addArticle() {
       savedAt: new Date().toISOString(),
       read: false, fav: false
     };
+    if (data.tweetUrl) article.tweetUrl = data.tweetUrl;
     articles.unshift(article);
     saveArticles();
     pushArticle(article);

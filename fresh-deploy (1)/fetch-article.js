@@ -23,7 +23,7 @@ export async function onRequestPost(context) {
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
-    const data = extractFromHtml(html);
+    const data = isThreadReaderUrl(url) ? extractThreadReader(html, url) : extractFromHtml(html);
 
     if (data.text && data.text.length > 300) {
       return new Response(JSON.stringify(data), {
@@ -95,6 +95,93 @@ function cleanText(text) {
     .replace(/\n{4,}/g, '\n\n\n')
     .trim()
     .slice(0, 20000);
+}
+
+function isThreadReaderUrl(url) {
+  return /threadreaderapp\.com\/thread\//i.test(url);
+}
+
+function extractThreadReader(html, url) {
+  const threadIdMatch = url.match(/\/thread\/(\d+)/);
+  const threadId = threadIdMatch ? threadIdMatch[1] : '';
+
+  // Author handle — first /user/ link on the page
+  const handleMatch = html.match(/<a[^>]+href=["']\/user\/([^"'\s\/]+)["']/i);
+  const handle = handleMatch ? handleMatch[1] : '';
+
+  // Display name — h4 containing the /user/ link
+  const displayNameMatch = html.match(/<h[34][^>]*>[\s\S]*?<a[^>]+href=["']\/user\/[^"']+["'][^>]*>([\s\S]*?)<\/a>/i);
+  const displayName = displayNameMatch
+    ? decodeHtmlEntities(displayNameMatch[1].replace(/<[^>]+>/g, '').trim())
+    : '';
+
+  const tweetUrl = handle && threadId
+    ? `https://twitter.com/${handle}/status/${threadId}`
+    : '';
+
+  // Title from og:title; strip the " on Thread Reader App" suffix
+  const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+  const pageTitle = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  let title = decodeHtmlEntities(
+    (ogTitle && ogTitle[1]) || (pageTitle && pageTitle[1]) || ''
+  ).replace(/\s*on Thread Reader App\s*/i, '').trim();
+  if (!title) title = handle ? `Thread by @${handle}` : 'Twitter Thread';
+
+  // Strip noise
+  let body = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+    .replace(/<header[\s\S]*?<\/header>/gi, '')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+    .replace(/<aside[\s\S]*?<\/aside>/gi, '')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+
+  // ThreadReaderApp wraps each tweet in <div class="content-tweet">
+  const tweetBlocks = [...body.matchAll(/<div[^>]+class=["'][^"']*content-tweet[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi)];
+  let text = '';
+
+  if (tweetBlocks.length > 0) {
+    text = tweetBlocks
+      .map(m => htmlToText(m[1]).trim())
+      .filter(t => t.length > 0)
+      .join('\n\n');
+  }
+
+  // Fallback: any div with 'tweet' in class
+  if (!text || text.length < 100) {
+    const anyBlocks = [...body.matchAll(/<div[^>]+class=["'][^"']*\btweet\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi)];
+    if (anyBlocks.length > 0) {
+      text = anyBlocks
+        .map(m => htmlToText(m[1]).trim())
+        .filter(t => t.length > 5)
+        .join('\n\n');
+    }
+  }
+
+  // Fallback: all paragraphs
+  if (!text || text.length < 100) {
+    const paragraphs = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
+      .map(m => decodeHtmlEntities(m[1].replace(/<[^>]+>/g, '').trim()))
+      .filter(p => p.length > 30);
+    text = paragraphs.join('\n\n');
+  }
+
+  if (!text || text.length < 50) return extractFromHtml(html);
+
+  // Use first tweet as title if title is still generic
+  if (title.startsWith('Thread by @')) {
+    const firstLine = text.split('\n').find(l => l.trim().length > 20);
+    if (firstLine) title = firstLine.trim().slice(0, 100) + (firstLine.length > 100 ? '…' : '');
+  }
+
+  text = cleanText(text);
+  const author = displayName ? `${displayName} (@${handle})` : handle ? `@${handle}` : '';
+  const excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim() + '…';
+
+  return { title, author, date: '', text, excerpt, tweetUrl, isThread: true };
 }
 
 function extractFromHtml(html) {
