@@ -301,7 +301,7 @@ let _auth, _db, _uid = null;
   } catch(e) { console.warn('Firebase init failed:', e); }
 })();
 
-function signIn()  { if (_auth) _auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(e => setStatus(e.message, 'error')); }
+function signIn()  { if (_auth) _auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider()).catch(e => setStatus(e.message, 'error')); }
 function signOut() { if (_auth) _auth.signOut(); }
 
 function setSyncState(syncing) {
@@ -628,6 +628,10 @@ render();
 
 if (_auth) {
   document.getElementById('authOverlay').classList.add('show');
+
+  // Handle return from signInWithRedirect (mobile)
+  _auth.getRedirectResult().catch(() => {});
+
   _auth.onAuthStateChanged(async user => {
     if (user) {
       _uid = user.uid;
