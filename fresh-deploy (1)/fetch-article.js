@@ -126,7 +126,7 @@ function extractThreadReader(html, url) {
     (ogTitle && ogTitle[1]) || (pageTitle && pageTitle[1]) || ''
   ).replace(/\s*on Thread Reader App\s*/i, '').trim() || (handle ? `Thread by @${handle}` : 'Twitter Thread');
 
-  // Strip noise + ThreadReaderApp tweet anchor tags (source of the junk attribute text)
+  // Strip scripts/styles/nav/etc
   let body = html
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')
@@ -135,14 +135,32 @@ function extractThreadReader(html, url) {
     .replace(/<footer[\s\S]*?<\/footer>/gi, '')
     .replace(/<aside[\s\S]*?<\/aside>/gi, '')
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<a[^>]*\bdata-tweet\b[^>]*>[\s\S]*?<\/a>/gi, '')
-    .replace(/<a[^>]*\bdata-screenname\b[^>]*>/gi, '');
+    .replace(/<!--[\s\S]*?-->/g, '');
 
-  // Extract all paragraphs
+  // Remove ALL anchor elements with attribute-aware regex.
+  // Standard <[^>]+> breaks when href contains a literal > (e.g. in mailto: body).
+  // This regex handles quoted attribute values that may contain >.
+  body = body
+    .replace(/<a(?:\s(?:[^"'>]|"[^"]*"|'[^']*')*)?>([\s\S]*?)<\/a>/gi, ' ')
+    .replace(/<a(?:\s(?:[^"'>]|"[^"]*"|'[^']*')*)?>/gi, ' ');
+
+  // Known ThreadReaderApp page-chrome strings to exclude from content
+  const noise = [
+    'stay in touch', 'get notified when new unrolls', 'thread may be removed',
+    'twitter may remove this content', 'save it as pdf', 'practice here first',
+    'read more on our help page', 'indie developers', 'premium member',
+    'small donation', 'donate anonymously', 'email the whole thread',
+    'how to get url link', 'you can paste full url', 'just the id like',
+    'support us', 'become a premium', 'server cost',
+  ];
+
   const paragraphs = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
     .map(m => decodeHtmlEntities(m[1].replace(/<[^>]+>/g, '').trim()))
-    .filter(p => p.length > 30 && !p.includes('data-tweet=') && !p.includes('data-screenname='));
+    .filter(p => {
+      if (p.length < 30) return false;
+      const lower = p.toLowerCase();
+      return !noise.some(n => lower.includes(n));
+    });
 
   let text = paragraphs.join('\n\n');
   if (!text || text.length < 100) return extractFromHtml(html);
