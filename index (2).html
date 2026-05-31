@@ -301,19 +301,23 @@ let _auth, _db, _uid = null;
   } catch(e) { console.warn('Firebase init failed:', e); }
 })();
 
+const _isIosStandalone = /iPad|iPhone|iPod/.test(navigator.userAgent) &&
+  (window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches);
+
+let _authInProgress = false;
 function signIn() {
-  if (!_auth) return;
+  if (!_auth || _authInProgress) return;
+  _authInProgress = true;
   const provider = new firebase.auth.GoogleAuthProvider();
-  // iOS PWA (standalone): signInWithRedirect sends the user to Safari and never comes back.
-  // signInWithPopup opens a Safari sheet that correctly returns to the app.
-  // For all other cases (regular mobile browser, desktop) redirect is more reliable.
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-  const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
-  if (isIOS && isStandalone) {
-    _auth.signInWithPopup(provider).catch(e => setStatus(e.message, 'error'));
-  } else {
-    _auth.signInWithRedirect(provider).catch(e => setStatus(e.message, 'error'));
-  }
+  const p = _isIosStandalone
+    ? _auth.signInWithPopup(provider)
+    : _auth.signInWithRedirect(provider);
+  p.catch(e => {
+    _authInProgress = false;
+    // These are harmless internal Firebase signals — don't show them to the user
+    if (e.code === 'auth/cancelled-popup-request' || e.code === 'auth/popup-closed-by-user') return;
+    setStatus(e.message, 'error');
+  });
 }
 function signOut() { if (_auth) _auth.signOut(); }
 
@@ -642,8 +646,8 @@ render();
 if (_auth) {
   document.getElementById('authOverlay').classList.add('show');
 
-  // Handle return from signInWithRedirect (mobile)
-  _auth.getRedirectResult().catch(() => {});
+  // Only process redirect result when not in iOS standalone mode (which uses popup instead)
+  if (!_isIosStandalone) _auth.getRedirectResult().catch(() => {});
 
   _auth.onAuthStateChanged(async user => {
     if (user) {
