@@ -137,12 +137,19 @@ function extractThreadReader(html, url) {
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
     .replace(/<!--[\s\S]*?-->/g, '');
 
-  // Remove ALL anchor elements with attribute-aware regex.
-  // Standard <[^>]+> breaks when href contains a literal > (e.g. in mailto: body).
-  // This regex handles quoted attribute values that may contain >.
+  // Blank out all href/src attribute values before tag stripping.
+  // This neutralises any literal > inside mailto: or long URLs that would
+  // otherwise break the <[^>]+> tag-stripping regex.
   body = body
-    .replace(/<a(?:\s(?:[^"'>]|"[^"]*"|'[^']*')*)?>([\s\S]*?)<\/a>/gi, ' ')
-    .replace(/<a(?:\s(?:[^"'>]|"[^"]*"|'[^']*')*)?>/gi, ' ');
+    .replace(/\bhref="[^"]*"/gi, 'href=""')
+    .replace(/\bhref='[^']*'/gi, "href=''")
+    .replace(/\bsrc="[^"]*"/gi, 'src=""')
+    .replace(/\baction="[^"]*"/gi, 'action=""');
+
+  // Remove all anchor elements and their content
+  body = body
+    .replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, ' ')
+    .replace(/<a\b[^>]*>/gi, ' ');
 
   // Known ThreadReaderApp page-chrome strings to exclude from content
   const noise = [
