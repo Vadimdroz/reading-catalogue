@@ -161,15 +161,36 @@ function extractThreadReader(html, url) {
     'support us', 'become a premium', 'server cost',
   ];
 
-  const paragraphs = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
-    .map(m => decodeHtmlEntities(m[1].replace(/<[^>]+>/g, '').trim()))
-    .filter(p => {
-      if (p.length < 30) return false;
-      const lower = p.toLowerCase();
-      return !noise.some(n => lower.includes(n));
-    });
+  // Primary: extract from ThreadReaderApp's content-tweet blocks.
+  // Split on the class string to avoid issues with > inside data-action attributes.
+  const contentChunks = body.split(/class="content-tweet\s+allow-preview"/i);
+  let tweetTexts = [];
+  if (contentChunks.length > 2) {
+    const MARKER = 'dir="auto">';
+    tweetTexts = contentChunks.slice(1).map(chunk => {
+      const idx = chunk.indexOf(MARKER);
+      if (idx === -1) return '';
+      let raw = chunk.slice(idx + MARKER.length);
+      const end = raw.search(/<sup\b/i);
+      if (end !== -1) raw = raw.slice(0, end);
+      return decodeHtmlEntities(
+        raw.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim()
+      );
+    }).filter(t => t.length >= 20);
+  }
 
-  let text = paragraphs.join('\n\n');
+  // Fallback: <p> tags (older ThreadReaderApp layout)
+  if (tweetTexts.length < 3) {
+    tweetTexts = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
+      .map(m => decodeHtmlEntities(m[1].replace(/<[^>]+>/g, '').trim()))
+      .filter(p => {
+        if (p.length < 30) return false;
+        const lower = p.toLowerCase();
+        return !noise.some(n => lower.includes(n));
+      });
+  }
+
+  let text = tweetTexts.join('\n\n');
   if (!text || text.length < 100) return extractFromHtml(html);
 
   // Use first paragraph as title if title is still generic
