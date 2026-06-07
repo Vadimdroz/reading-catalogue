@@ -23,7 +23,15 @@ export async function onRequestPost(context) {
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
-    const data = isThreadReaderUrl(url) ? extractThreadReader(html, url) : extractFromHtml(html);
+    let data = isThreadReaderUrl(url) ? extractThreadReader(html, url) : extractFromHtml(html);
+    // If ThreadReaderApp didn't find actual tweets (isThread not set), try oembed fallback
+    if (isThreadReaderUrl(url) && !data.isThread) {
+      const tidMatch = url.match(/\/thread\/(\d+)/);
+      if (tidMatch) {
+        const oembedResult = await fetchTweetOembed(tidMatch[1]).catch(() => null);
+        if (oembedResult) data = oembedResult;
+      }
+    }
 
     if (data.text && data.text.length > 300) {
       return new Response(JSON.stringify(data), {
@@ -257,6 +265,18 @@ function extractFromHtml(html) {
     }
   }
 
+  // DraftJS / rich-text editor content (e.g. ynet.co.il uses <span data-text="true">)
+  const dataTextSpans = [...body.matchAll(/<span[^>]+data-text="true"[^>]*>([\s\S]*?)<\/span>/gi)]
+    .map(m => decodeHtmlEntities(m[1].replace(/<[^>]+>/g, '').trim()))
+    .filter(t => t.length > 10);
+  if (dataTextSpans.length > 0) {
+    const text = cleanText(dataTextSpans.join('\n'));
+    if (text.length > 300) {
+      const excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim() + '…';
+      return { title, author, date, text, excerpt };
+    }
+  }
+
   // All paragraphs fallback
   const paragraphs = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
     .map(m => decodeHtmlEntities(m[1].replace(/<[^>]+>/g, '').trim()))
@@ -270,6 +290,35 @@ function extractFromHtml(html) {
   const text = cleanText(htmlToText(body));
   const excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim() + '…';
   return { title, author, date, text, excerpt };
+}
+
+async function fetchTweetOembed(tweetId) {
+  const res = await fetch(
+    `https://publish.twitter.com/oembed?url=https://twitter.com/i/web/status/${tweetId}&omit_script=true&dnt=true`
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!data || !data.html) return null;
+
+  const html = data.html;
+  const pMatch = html.match(/<p\b[^>]*>([\s\S]*?)<\/p>/i);
+  if (!pMatch) return null;
+
+  let text = pMatch[1]
+    .replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, '')  // strip links (t.co shorteners, pic URLs)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .trim();
+  text = decodeHtmlEntities(text).replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim();
+
+  if (text.length < 5) return null;
+
+  const author = data.author_name || '';
+  const title = text.slice(0, 100) + (text.length > 100 ? '…' : '');
+  const excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim() + '…';
+  const tweetUrl = data.url || `https://twitter.com/i/web/status/${tweetId}`;
+
+  return { title, author, date: '', text, excerpt, tweetUrl, isThread: false };
 }
 
 function parseJinaResponse(raw) {
@@ -294,7 +343,7 @@ function parseJinaResponse(raw) {
     }
   }
 
-  const text = lines.slice(bodyStart)
+  let text = lines.slice(bodyStart)
     .map(l => l
       .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')   // remove markdown images
       .replace(/\[\]\([^)]*\)/g, '')              // remove empty links
@@ -308,6 +357,29 @@ function parseJinaResponse(raw) {
       .replace(/^>\s+/, '')
     )
     .filter(l => l.trim().length === 0 || l.trim().length > 20)
+    .join('\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+
+  // Strip duplicate title lines (title shown separately in the card)
+  if (title && title.length > 10) {
+    const esc = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    text = text.replace(new RegExp('^' + esc + '\\s*$', 'gm'), '');
+  }
+  // Strip ad/widget boilerplate lines that survive the length filter
+  text = text
+    .replace(/^(Sponsored|Promoted)\s+Links.*/gim, '')
+    .split('\n')
+    .filter(l => {
+      const t = l.trim().toLowerCase();
+      if (!t) return true;
+      return !(
+        t.endsWith('learn more') || t.endsWith('get offer') ||
+        t.endsWith('shop now')   || t.endsWith('read more') ||
+        t.endsWith('find out more') || t.endsWith('shop now.') ||
+        t === 'undo'
+      );
+    })
     .join('\n')
     .replace(/\n{2,}/g, '\n')
     .trim();
