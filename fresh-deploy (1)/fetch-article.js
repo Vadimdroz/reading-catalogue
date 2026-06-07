@@ -33,7 +33,9 @@ export async function onRequestPost(context) {
       }
     }
 
-    if (data.text && data.text.length > 300) {
+    // Tweet/oembed results may be short — accept if meaningful; articles need 300+
+    const minLen = (data.tweetUrl && !data.isThread) ? 10 : 300;
+    if (data.text && data.text.length >= minLen) {
       return new Response(JSON.stringify(data), {
         status: 200, headers: { 'Content-Type': 'application/json' }
       });
@@ -173,6 +175,7 @@ function extractThreadReader(html, url) {
   // Split on the class string to avoid issues with > inside data-action attributes.
   const contentChunks = body.split(/class="content-tweet\s+allow-preview"/i);
   let tweetTexts = [];
+  let foundRealTweets = false;
   if (contentChunks.length > 2) {
     const MARKER = 'dir="auto">';
     tweetTexts = contentChunks.slice(1).map(chunk => {
@@ -185,10 +188,13 @@ function extractThreadReader(html, url) {
         raw.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim()
       );
     }).filter(t => t.length >= 20);
+    if (tweetTexts.length >= 1) foundRealTweets = true;
   }
 
   // Fallback: <p> tags (older ThreadReaderApp layout)
-  if (tweetTexts.length < 3) {
+  // Do NOT set foundRealTweets — this path also catches error/request pages,
+  // so we leave isThread: false to allow the oembed fallback to kick in.
+  if (!foundRealTweets) {
     tweetTexts = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
       .map(m => decodeHtmlEntities(m[1].replace(/<[^>]+>/g, '').trim()))
       .filter(p => {
@@ -211,7 +217,7 @@ function extractThreadReader(html, url) {
   const author = displayName ? `${displayName} (@${handle})` : handle ? `@${handle}` : '';
   const excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim() + '…';
 
-  return { title, author, date: '', text, excerpt, tweetUrl, isThread: true };
+  return { title, author, date: '', text, excerpt, tweetUrl, isThread: foundRealTweets };
 }
 
 function extractFromHtml(html) {
