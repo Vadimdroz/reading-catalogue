@@ -555,7 +555,7 @@ function openFullscreen(id) {
   document.getElementById('fs-link').href = a.url || '#';
   const parts = [a.source, a.author, a.date ? fmtDate(a.date) : '', a.readTime].filter(Boolean);
   document.getElementById('fs-meta').textContent = parts.join(' · ');
-  document.getElementById('fs-text').textContent = (a.text || '').replace(/\n{3,}/g, '\n\n');
+  document.getElementById('fs-text').textContent = (a.text || '').replace(/\n{2,}/g, '\n');
   const reader = document.getElementById('fs-reader');
   reader.classList.add('open');
   reader.querySelector('.fs-body').scrollTop = 0;

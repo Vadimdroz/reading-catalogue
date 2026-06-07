@@ -83,7 +83,7 @@ function htmlToText(html) {
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/gi, ' ')
     .replace(/[ \t]{3,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\n{2,}/g, '\n')
     .trim();
 }
 
@@ -92,7 +92,7 @@ function cleanText(text) {
     .split('\n')
     .filter(line => line.trim().length === 0 || line.trim().length > 25)
     .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\n{2,}/g, '\n')
     .trim()
     .slice(0, 20000);
 }
@@ -296,6 +296,8 @@ function parseJinaResponse(raw) {
 
   const text = lines.slice(bodyStart)
     .map(l => l
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')   // remove markdown images
+      .replace(/\[\]\([^)]*\)/g, '')              // remove empty links
       .replace(/^#{1,6}\s+/, '')
       .replace(/\*\*([^*]+)\*\*/g, '$1')
       .replace(/\*([^*]+)\*/g, '$1')
@@ -307,7 +309,7 @@ function parseJinaResponse(raw) {
     )
     .filter(l => l.trim().length === 0 || l.trim().length > 20)
     .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\n{2,}/g, '\n')
     .trim();
 
   if (!title && text) title = text.split('\n').find(l => l.trim().length > 10) || 'Untitled';
