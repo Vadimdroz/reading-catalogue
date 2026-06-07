@@ -284,6 +284,7 @@ function parseJinaResponse(raw) {
       .replace(/`([^`]+)`/g, '$1')
       .replace(/^>\s+/, '')
     )
+    .filter(l => l.trim().length === 0 || l.trim().length > 20)
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

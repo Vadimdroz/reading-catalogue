@@ -241,7 +241,7 @@
     <!-- URL mode -->
     <div id="url-mode">
       <div class="add-row">
-        <input type="url" id="url-input" placeholder="Paste article URL here…" autocomplete="off" />
+        <input type="url" id="url-input" placeholder="Paste article URL or tweet link…" autocomplete="off" />
         <button class="btn-add" id="add-btn">Save article</button>
       </div>
     </div>
@@ -402,12 +402,22 @@ function updateStats() {
 }
 
 async function addArticle() {
-  var url = document.getElementById('url-input').value.trim();
-  if (!url.startsWith('http')) { setStatus('Please enter a valid URL starting with http', 'error'); return; }
+  var rawUrl = document.getElementById('url-input').value.trim();
+  if (!rawUrl.startsWith('http')) { setStatus('Please enter a valid URL starting with http', 'error'); return; }
+
+  // Auto-convert Twitter/X tweet URLs → ThreadReaderApp for thread unrolling
+  var url = rawUrl;
+  var originalTweetUrl = '';
+  var tweetMatch = rawUrl.match(/(?:twitter\.com|x\.com)\/[^/?#]+\/status\/(\d+)/i);
+  if (tweetMatch) {
+    originalTweetUrl = rawUrl;
+    url = 'https://threadreaderapp.com/thread/' + tweetMatch[1] + '.html';
+  }
+
   if (articles.find(function(a) { return a.url === url; })) { setStatus('This URL is already saved.', 'error'); return; }
   var btn = document.getElementById('add-btn');
   btn.disabled = true;
-  setStatus('Fetching article...');
+  setStatus(originalTweetUrl ? 'Twitter thread detected — unrolling via ThreadReaderApp…' : 'Fetching article...');
   try {
     var res = await fetch('/fetch-article', {
       method: 'POST',
@@ -420,7 +430,7 @@ async function addArticle() {
     var article = {
       id: Date.now(), url: url,
       title: data.title || 'Untitled',
-      source: data.isThread ? 'X / Twitter' : getDomain(url),
+      source: (data.isThread || originalTweetUrl) ? 'X / Twitter' : getDomain(url),
       author: data.author || '',
       date: data.date || '',
       excerpt: data.excerpt || '',
@@ -430,6 +440,7 @@ async function addArticle() {
       read: false, fav: false
     };
     if (data.tweetUrl) article.tweetUrl = data.tweetUrl;
+    else if (originalTweetUrl) article.tweetUrl = originalTweetUrl;
     articles.unshift(article);
     saveArticles();
     pushArticle(article);
