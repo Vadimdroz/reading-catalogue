@@ -522,7 +522,7 @@ function render() {
   <div class="read-panel open">
     <div class="read-panel-inner">
       <h2>${escHtml(a.title)}</h2>
-      <div class="article-body">${escHtml(a.text)}</div>
+      <div class="article-body">${escHtml((a.text||'').replace(/\n{3,}/g,'\n\n'))}</div>
     </div>
     <div class="read-bar">
       <a href="${escAttr(a.url)}" target="_blank" rel="noopener">Open original ↗</a>
@@ -544,7 +544,7 @@ function openFullscreen(id) {
   document.getElementById('fs-link').href = a.url || '#';
   const parts = [a.source, a.author, a.date ? fmtDate(a.date) : '', a.readTime].filter(Boolean);
   document.getElementById('fs-meta').textContent = parts.join(' · ');
-  document.getElementById('fs-text').textContent = a.text || '';
+  document.getElementById('fs-text').textContent = (a.text || '').replace(/\n{3,}/g, '\n\n');
   const reader = document.getElementById('fs-reader');
   reader.classList.add('open');
   reader.querySelector('.fs-body').scrollTop = 0;
