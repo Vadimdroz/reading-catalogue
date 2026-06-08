@@ -390,6 +390,12 @@ function parseJinaResponse(raw) {
     .replace(/\n{2,}/g, '\n')
     .trim();
 
+  // For X/Twitter Jina titles: "name on X: "tweet text..."" → extract author + clean title
+  if (!author && title && /\bon X[:：]/i.test(title)) {
+    author = title.replace(/\s+on X[:：].*/i, '').trim();
+    title = title.replace(/^.*?\bon X[:：]\s*["""„]/i, '').replace(/[""""]$/, '').trim();
+  }
+
   if (!title && text) title = text.split('\n').find(l => l.trim().length > 10) || 'Untitled';
   const excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim() + '…';
   return { title: title || 'Untitled', author, date, text, excerpt };

@@ -429,24 +429,24 @@ async function addArticle() {
   var rawUrl = document.getElementById('url-input').value.trim();
   if (!rawUrl.startsWith('http')) { setStatus('Please enter a valid URL starting with http', 'error'); return; }
 
-  // Auto-convert Twitter/X tweet URLs → ThreadReaderApp for thread unrolling
+  // Detect Twitter/X URLs — send original URL directly (Jina fetches full threads)
   var url = rawUrl;
   var originalTweetUrl = '';
   var tweetMatch = rawUrl.match(/(?:twitter\.com|x\.com)\/[^/?#]+\/status\/(\d+)/i);
   if (tweetMatch) {
     originalTweetUrl = rawUrl;
-    url = 'https://threadreaderapp.com/thread/' + tweetMatch[1] + '.html';
+    url = rawUrl.split('?')[0];  // strip tracking params (e.g. ?s=20) for tweet URLs
   }
 
   if (articles.find(function(a) { return a.url === url; })) { setStatus('This URL is already saved.', 'error'); return; }
   var btn = document.getElementById('add-btn');
   btn.disabled = true;
-  setStatus(originalTweetUrl ? 'Twitter thread detected — unrolling via ThreadReaderApp…' : 'Fetching article...');
+  setStatus(originalTweetUrl ? 'Fetching tweet thread…' : 'Fetching article...');
   try {
     var res = await fetch('/fetch-article', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: url, tweetUrl: originalTweetUrl || '' })
+      body: JSON.stringify({ url: url, tweetUrl: url })
     });
     if (!res.ok) throw new Error('fetch failed');
     var data = await res.json();
