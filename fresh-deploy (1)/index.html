@@ -181,9 +181,21 @@
   .user-row { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
   .btn-signout { font-size:12px; color:var(--muted); background:none; border:1px solid var(--border); border-radius:var(--radius-sm); padding:3px 9px; cursor:pointer; font-family:var(--font-ui); }
   .btn-signout:hover { color:var(--text); border-color:var(--border-hover); }
+  .btn-settings { font-size:14px; color:var(--muted); background:none; border:none; cursor:pointer; padding:2px 5px; line-height:1; }
+  .btn-settings:hover { color:var(--text); }
   .sync-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); display:inline-block; }
   .sync-dot.syncing { background:var(--gold); animation:pulse 1s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* Settings panel */
+  .settings-panel { display:none; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:.85rem 1.25rem; margin-bottom:1.5rem; }
+  .settings-panel.open { display:block; }
+  .settings-panel h3 { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin-bottom:10px; }
+  .settings-row { display:flex; gap:8px; }
+  .settings-row input { flex:1; height:36px; border:1px solid var(--border); border-radius:var(--radius-sm); padding:0 10px; font-size:13px; background:var(--bg); color:var(--text); outline:none; font-family:var(--font-ui); }
+  .settings-row input:focus { border-color:var(--accent); }
+  .btn-save-key { height:36px; padding:0 14px; border:none; border-radius:var(--radius-sm); background:var(--accent); color:#fff; font-size:13px; cursor:pointer; font-family:var(--font-ui); white-space:nowrap; }
+  .key-note { font-size:12px; color:var(--muted); margin-top:6px; }
 </style>
 </head>
 <body>
@@ -223,13 +235,25 @@
   <div class="app-header">
     <div class="header-row">
       <h1>Reading Catalogue</h1>
-      <div class="user-row" id="userRow" style="display:none">
-        <span class="sync-dot" id="syncDot"></span>
-        <span id="userName"></span>
-        <button class="btn-signout" onclick="signOut()">Sign out</button>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button class="btn-settings" onclick="toggleSettings()" title="Settings">⚙</button>
+        <div class="user-row" id="userRow" style="display:none">
+          <span class="sync-dot" id="syncDot"></span>
+          <span id="userName"></span>
+          <button class="btn-signout" onclick="signOut()">Sign out</button>
+        </div>
       </div>
     </div>
     <p>Paste any article link to save, catalogue, and read offline</p>
+  </div>
+
+  <div class="settings-panel" id="settings-panel">
+    <h3>Settings</h3>
+    <div class="settings-row">
+      <input type="password" id="gemini-key-input" placeholder="Gemini API key — enables AI titles for imported tweets" autocomplete="off" />
+      <button class="btn-save-key" onclick="saveGeminiKey()">Save</button>
+    </div>
+    <div class="key-note" id="key-note"></div>
   </div>
 
   <div class="add-section">
@@ -445,9 +469,10 @@ async function addArticle() {
     saveArticles();
     pushArticle(article);
     document.getElementById('url-input').value = '';
-    setStatus('Article saved!', 'success');
+    setStatus('Saved!', 'success');
     setTimeout(function() { setStatus(''); }, 3000);
     render();
+    if (originalTweetUrl) generateAiTitle(article.id, article.text);
   } catch (err) {
     setStatus('Could not fetch this article. The site may block automated access.', 'error');
   } finally {
@@ -618,6 +643,55 @@ function addManualEntry() {
   setStatus('Post saved!', 'success');
   setTimeout(function() { setStatus(''); }, 3000);
   render();
+}
+
+// Settings
+function toggleSettings() {
+  const panel = document.getElementById('settings-panel');
+  panel.classList.toggle('open');
+  if (panel.classList.contains('open')) {
+    const note = document.getElementById('key-note');
+    note.textContent = localStorage.getItem('gemini_key') ? '✓ Key is saved' : 'No key set yet';
+  }
+}
+function saveGeminiKey() {
+  const val = document.getElementById('gemini-key-input').value.trim();
+  if (!val) { document.getElementById('key-note').textContent = 'Please enter a key.'; return; }
+  localStorage.setItem('gemini_key', val);
+  document.getElementById('gemini-key-input').value = '';
+  document.getElementById('key-note').textContent = '✓ Key saved!';
+}
+
+// AI title generation for imported tweets
+async function generateAiTitle(articleId, tweetText) {
+  const key = localStorage.getItem('gemini_key');
+  if (!key || !tweetText) return;
+  try {
+    const prompt = 'Write a short, meaningful title (5–8 words) for this social media post. Match the language of the post exactly. Return ONLY the title, no quotes, no explanation:\n\n' + tweetText.slice(0, 600);
+    const res = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + key,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 60, temperature: 0.3 }
+        })
+      }
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const title = raw.trim().replace(/^["'"'„«»]+|["'"'»«]+$/g, '').trim();
+    if (!title || title.length < 3) return;
+    const a = articles.find(function(x) { return x.id === articleId; });
+    if (a) {
+      a.title = title;
+      saveArticles();
+      pushArticle(a);
+      render();
+    }
+  } catch (e) { /* silent fail — basic title already saved */ }
 }
 
 // Events
