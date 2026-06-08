@@ -1,8 +1,9 @@
 export async function onRequestPost(context) {
-  let url;
+  let url, originalTweetUrl;
   try {
     const body = await context.request.json();
     url = body.url;
+    originalTweetUrl = body.tweetUrl || '';
     if (!url || !url.startsWith('http')) throw new Error('bad url');
   } catch {
     return new Response(JSON.stringify({ error: 'Invalid request' }), {
@@ -25,12 +26,9 @@ export async function onRequestPost(context) {
     const html = await res.text();
     let data = isThreadReaderUrl(url) ? extractThreadReader(html, url) : extractFromHtml(html);
     // If ThreadReaderApp didn't find actual tweets (isThread not set), try oembed fallback
-    if (isThreadReaderUrl(url) && !data.isThread) {
-      const tidMatch = url.match(/\/thread\/(\d+)/);
-      if (tidMatch) {
-        const oembedResult = await fetchTweetOembed(tidMatch[1]).catch(() => null);
-        if (oembedResult) data = oembedResult;
-      }
+    if (isThreadReaderUrl(url) && !data.isThread && originalTweetUrl) {
+      const oembedResult = await fetchTweetOembed(originalTweetUrl).catch(() => null);
+      if (oembedResult) data = oembedResult;
     }
 
     // Tweet/oembed results may be short — accept if meaningful; articles need 300+
@@ -298,9 +296,11 @@ function extractFromHtml(html) {
   return { title, author, date, text, excerpt };
 }
 
-async function fetchTweetOembed(tweetId) {
+async function fetchTweetOembed(tweetUrl) {
+  // Normalise x.com/twitter.com URL — publish.x.com requires a full username/status URL
+  const cleanUrl = tweetUrl.split('?')[0].replace('twitter.com', 'x.com');
   const res = await fetch(
-    `https://publish.twitter.com/oembed?url=https://twitter.com/i/web/status/${tweetId}&omit_script=true&dnt=true`
+    `https://publish.x.com/oembed?url=${encodeURIComponent(cleanUrl)}&omit_script=true&dnt=true`
   );
   if (!res.ok) return null;
   const data = await res.json();
@@ -311,7 +311,7 @@ async function fetchTweetOembed(tweetId) {
   if (!pMatch) return null;
 
   let text = pMatch[1]
-    .replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, '')  // strip links (t.co shorteners, pic URLs)
+    .replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, '')  // strip t.co shorteners, pic URLs, etc.
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<[^>]+>/g, '')
     .trim();
@@ -322,9 +322,9 @@ async function fetchTweetOembed(tweetId) {
   const author = data.author_name || '';
   const title = text.slice(0, 100) + (text.length > 100 ? '…' : '');
   const excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim() + '…';
-  const tweetUrl = data.url || `https://twitter.com/i/web/status/${tweetId}`;
+  const returnUrl = data.url || cleanUrl;
 
-  return { title, author, date: '', text, excerpt, tweetUrl, isThread: false };
+  return { title, author, date: '', text, excerpt, tweetUrl: returnUrl, isThread: false };
 }
 
 function parseJinaResponse(raw) {

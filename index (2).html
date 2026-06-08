@@ -422,7 +422,7 @@ async function addArticle() {
     var res = await fetch('/fetch-article', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: url })
+      body: JSON.stringify({ url: url, tweetUrl: originalTweetUrl || '' })
     });
     if (!res.ok) throw new Error('fetch failed');
     var data = await res.json();
