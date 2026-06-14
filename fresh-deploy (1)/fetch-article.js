@@ -58,13 +58,15 @@ export async function onRequestPost(context) {
       } catch { return null; }
     };
 
-    const [traData, nitterData, guestData] = await Promise.all([
+    const [traData, nitterData, guestData, oembedData] = await Promise.all([
       safeRun(() => tryThreadReaderApp(url), 100),
       safeRun(() => fetchNitterThread(url), 30),
       safeRun(() => fetchTwitterGuestApi(url), 30),
+      safeRun(() => fetchTweetOembed(url), 10),  // fast fallback for single tweets
     ]);
 
-    const tweetResult = traData || nitterData || guestData;
+    // Prefer full-thread results over oembed (which only returns one tweet)
+    const tweetResult = traData || nitterData || guestData || oembedData;
     if (tweetResult) {
       return new Response(JSON.stringify(tweetResult), {
         status: 200, headers: { 'Content-Type': 'application/json' }
