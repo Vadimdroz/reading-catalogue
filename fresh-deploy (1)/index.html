@@ -410,6 +410,12 @@ function getDomain(url) {
 function readTime(text) {
   return Math.max(1, Math.round((text || '').split(/\s+/).length / 220)) + ' min read';
 }
+function detectRtl(text) {
+  const sample = (text || '').replace(/\s+/g, '').slice(0, 400);
+  if (!sample) return false;
+  const rtl = (sample.match(/[֐-׿؀-ۿ]/g) || []).length;
+  return rtl / sample.length > 0.25;
+}
 function fmtDate(iso) {
   if (!iso) return '';
   try { return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return ''; }
@@ -460,6 +466,7 @@ async function addArticle() {
       excerpt: data.excerpt || '',
       text: data.text || '',
       readTime: readTime(data.text),
+      isRtl: detectRtl(data.text || data.title),
       savedAt: new Date().toISOString(),
       read: false, fav: false
     };
@@ -529,6 +536,8 @@ function render() {
   container.innerHTML = list.map(a => {
     const isOpen = openCard === a.id;
     const hasText = !!(a.text && a.text.length > 50);
+    const isRtl = ('isRtl' in a) ? a.isRtl : detectRtl(a.text || a.title);
+    const rtl = isRtl ? ' dir="rtl"' : '';
     return `
 <div class="card ${a.read ? 'is-read' : ''}" id="card-${a.id}">
   <div class="card-body">
@@ -538,8 +547,8 @@ function render() {
       ${a.date ? `<span class="meta-dot">·</span><span class="meta-text">${fmtDate(a.date)}</span>` : ''}
       <span class="meta-dot">·</span><span class="meta-text">${a.readTime}</span>
     </div>
-    <div class="card-title" onclick="toggleOpen(${a.id})">${escHtml(a.title)}</div>
-    <div class="card-excerpt">${escHtml(a.excerpt)}</div>
+    <div class="card-title"${rtl} onclick="toggleOpen(${a.id})">${escHtml(a.title)}</div>
+    <div class="card-excerpt"${rtl}>${escHtml(a.excerpt)}</div>
     <div class="card-footer">
       <div class="badges">
         <span class="badge ${a.read ? 'badge-read' : 'badge-unread'}">${a.read ? 'Read' : 'Unread'}</span>
@@ -557,8 +566,8 @@ function render() {
   ${isOpen && hasText ? `
   <div class="read-panel open">
     <div class="read-panel-inner">
-      <h2>${escHtml(a.title)}</h2>
-      <div class="article-body">${escHtml((a.text||'').replace(/\n{3,}/g,'\n\n'))}</div>
+      <h2${rtl}>${escHtml(a.title)}</h2>
+      <div class="article-body"${rtl}>${escHtml((a.text||'').replace(/\n{3,}/g,'\n\n'))}</div>
     </div>
     <div class="read-bar">
       <a href="${escAttr(a.url)}" target="_blank" rel="noopener">Open original ↗</a>
@@ -581,6 +590,9 @@ function openFullscreen(id) {
   const parts = [a.source, a.author, a.date ? fmtDate(a.date) : '', a.readTime].filter(Boolean);
   document.getElementById('fs-meta').textContent = parts.join(' · ');
   document.getElementById('fs-text').textContent = (a.text || '').replace(/\n{2,}/g, '\n');
+  const isRtl = ('isRtl' in a) ? a.isRtl : detectRtl(a.text || a.title);
+  document.getElementById('fs-h2').dir = isRtl ? 'rtl' : '';
+  document.getElementById('fs-text').dir = isRtl ? 'rtl' : '';
   const reader = document.getElementById('fs-reader');
   reader.classList.add('open');
   reader.querySelector('.fs-body').scrollTop = 0;
@@ -628,6 +640,7 @@ function addManualEntry() {
     excerpt,
     text,
     readTime: Math.max(1, Math.round(words / 220)) + ' min read',
+    isRtl: detectRtl(text),
     savedAt: new Date().toISOString(),
     read: false,
     fav: false,
