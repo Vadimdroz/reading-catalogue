@@ -95,8 +95,18 @@ function htmlToText(html) {
     .trim();
 }
 
+function stripWebComponentCss(text) {
+  // Strip number-flow-react shadow DOM CSS injected by Twitter/X's animated counters.
+  // Pattern: :host{...}...number-flow-react...{...}NUMBER — always on one line in Jina output.
+  return text
+    .replace(/:host\{[^\n]*\}/g, '')
+    .replace(/\bnumber-flow-react\b[^\n]*/g, '')
+    .replace(/\d+[KMB]?\s*(Views|Likes|Reposts|Bookmarks|Replies)/gi, '')
+    .replace(/\d+:\d+\s*(AM|PM)\s*·[^\n]*/gi, '');
+}
+
 function cleanText(text) {
-  return decodeHtmlEntities(text)
+  return decodeHtmlEntities(stripWebComponentCss(text))
     .split('\n')
     .filter(line => line.trim().length === 0 || line.trim().length > 25)
     .join('\n')
@@ -328,7 +338,7 @@ async function fetchTweetOembed(tweetUrl) {
 }
 
 function parseJinaResponse(raw) {
-  const lines = raw.split('\n');
+  const lines = stripWebComponentCss(raw).split('\n');
   let title = '', date = '', author = '', bodyStart = 0;
 
   for (let i = 0; i < Math.min(lines.length, 25); i++) {
