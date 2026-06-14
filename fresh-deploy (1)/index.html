@@ -129,6 +129,7 @@
   .read-panel-inner { padding: 1.5rem 1.25rem; max-height: 480px; overflow-y: auto; }
   .read-panel-inner h2 { font-family: var(--font); font-size: 20px; font-weight: normal; margin-bottom: 1rem; line-height: 1.4; }
   .article-body { font-family: var(--font); font-size: 16px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
+  [dir="rtl"] { text-align: right; }
   .read-bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 1.25rem; border-top: 1px solid var(--border); background: var(--surface); }
   .read-bar a { font-size: 13px; color: var(--accent); text-decoration: none; }
   .read-bar a:hover { text-decoration: underline; }
@@ -414,7 +415,7 @@ function detectRtl(text) {
   const sample = (text || '').replace(/\s+/g, '').slice(0, 400);
   if (!sample) return false;
   const rtl = (sample.match(/[֐-׿؀-ۿ]/g) || []).length;
-  return rtl / sample.length > 0.25;
+  return rtl / sample.length > 0.15;
 }
 function fmtDate(iso) {
   if (!iso) return '';
@@ -536,7 +537,7 @@ function render() {
   container.innerHTML = list.map(a => {
     const isOpen = openCard === a.id;
     const hasText = !!(a.text && a.text.length > 50);
-    const isRtl = ('isRtl' in a) ? a.isRtl : detectRtl(a.text || a.title);
+    const isRtl = a.isRtl || detectRtl(a.text || a.title);
     const rtl = isRtl ? ' dir="rtl"' : '';
     return `
 <div class="card ${a.read ? 'is-read' : ''}" id="card-${a.id}">
