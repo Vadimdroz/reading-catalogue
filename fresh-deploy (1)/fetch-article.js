@@ -11,75 +11,73 @@ export async function onRequestPost(context) {
     });
   }
 
-  // Strategy 1: fetch directly with realistic browser headers
+  const isTweet = isTweetUrl(url);
+  let directError = 'skipped (Twitter URL)';
+
+  // Strategy 1: direct fetch — skip for Twitter/X because their SSR only returns
+  // tweet #1 before a login wall, which looks like success but is incomplete.
+  if (!isTweet) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9,he;q=0.8',
+          'Cache-Control': 'no-cache',
+        }
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      let data = isThreadReaderUrl(url) ? extractThreadReader(html, url) : extractFromHtml(html);
+      if (isThreadReaderUrl(url) && !data.isThread && originalTweetUrl) {
+        const oembedResult = await fetchTweetOembed(originalTweetUrl).catch(() => null);
+        if (oembedResult) data = oembedResult;
+      }
+      const minLen = (data.tweetUrl && !data.isThread) ? 10 : 300;
+      if (data.text && data.text.length >= minLen) {
+        return new Response(JSON.stringify(data), {
+          status: 200, headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      throw new Error('Not enough text extracted directly');
+    } catch (e) {
+      directError = e.message;
+    }
+  }
+
+  // Strategy 2: For Twitter/X URLs, try Nitter (renders full threads without login)
+  if (isTweet) {
+    try {
+      const nitterData = await fetchNitterThread(url);
+      if (nitterData && nitterData.text && nitterData.text.length > 30) {
+        return new Response(JSON.stringify(nitterData), {
+          status: 200, headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    } catch {}
+  }
+
+  // Strategy 3: Jina Reader proxy
   try {
-    const res = await fetch(url, {
+    const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9,he;q=0.8',
-        'Cache-Control': 'no-cache',
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'text/plain, */*',
+        'X-No-Cache': 'true',
+        'X-Timeout': '25',
       }
     });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const html = await res.text();
-    let data = isThreadReaderUrl(url) ? extractThreadReader(html, url) : extractFromHtml(html);
-    // If ThreadReaderApp didn't find actual tweets (isThread not set), try oembed fallback
-    if (isThreadReaderUrl(url) && !data.isThread && originalTweetUrl) {
-      const oembedResult = await fetchTweetOembed(originalTweetUrl).catch(() => null);
-      if (oembedResult) data = oembedResult;
-    }
-
-    // Tweet/oembed results may be short — accept if meaningful; articles need 300+
-    const minLen = (data.tweetUrl && !data.isThread) ? 10 : 300;
-    if (data.text && data.text.length >= minLen) {
-      return new Response(JSON.stringify(data), {
-        status: 200, headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    throw new Error('Not enough text extracted directly');
-
-  } catch (err1) {
-
-    // Strategy 2: For Twitter/X URLs, try Nitter to get the full thread without login wall
-    if (isTweetUrl(url)) {
-      try {
-        const nitterData = await fetchNitterThread(url);
-        if (nitterData && nitterData.text && nitterData.text.length > 30) {
-          return new Response(JSON.stringify(nitterData), {
-            status: 200, headers: { 'Content-Type': 'application/json' }
-          });
-        }
-      } catch {}
-    }
-
-    // Strategy 3: Jina Reader proxy
-    try {
-      const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0',
-          'Accept': 'text/plain, */*',
-          'X-No-Cache': 'true',
-          'X-Timeout': '25',
-        }
-      });
-
-      if (!jinaRes.ok) throw new Error(`Jina HTTP ${jinaRes.status}`);
-      const raw = await jinaRes.text();
-      const data = parseJinaResponse(raw);
-
-      if (!data.text || data.text.length < 100) throw new Error('Jina returned insufficient text');
-
-      return new Response(JSON.stringify(data), {
-        status: 200, headers: { 'Content-Type': 'application/json' }
-      });
-
-    } catch (err2) {
-      return new Response(JSON.stringify({
-        error: `Could not fetch. Direct: ${err1.message}. Jina: ${err2.message}. Nitter also failed.`
-      }), { status: 502, headers: { 'Content-Type': 'application/json' } });
-    }
+    if (!jinaRes.ok) throw new Error(`Jina HTTP ${jinaRes.status}`);
+    const raw = await jinaRes.text();
+    const data = parseJinaResponse(raw);
+    if (!data.text || data.text.length < 100) throw new Error('Jina returned insufficient text');
+    return new Response(JSON.stringify(data), {
+      status: 200, headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (err2) {
+    return new Response(JSON.stringify({
+      error: `Could not fetch. Direct: ${directError}. Nitter: all instances failed. Jina: ${err2.message}`
+    }), { status: 502, headers: { 'Content-Type': 'application/json' } });
   }
 }
 
@@ -171,8 +169,10 @@ async function fetchNitterThread(tweetUrl) {
   const [, username, id] = match;
 
   for (const instance of NITTER_INSTANCES) {
+    const nitterUrl = `https://${instance}/${username}/status/${id}`;
+
+    // Try A: direct fetch of Nitter (SSR, no JS needed)
     try {
-      const nitterUrl = `https://${instance}/${username}/status/${id}`;
       const res = await fetch(nitterUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -181,10 +181,30 @@ async function fetchNitterThread(tweetUrl) {
         },
         redirect: 'follow',
       });
-      if (!res.ok) continue;
-      const html = await res.text();
-      const data = parseNitterThread(html);
-      if (data && data.text && data.text.length > 30) return data;
+      if (res.ok) {
+        const html = await res.text();
+        const data = parseNitterThread(html);
+        if (data && data.text && data.text.length > 30) return data;
+      }
+    } catch {}
+
+    // Try B: Jina on Nitter URL (in case direct fetch is IP-blocked)
+    try {
+      const jinaRes = await fetch(`https://r.jina.ai/${nitterUrl}`, {
+        headers: {
+          'Accept': 'text/plain, */*',
+          'X-No-Cache': 'true',
+          'X-Timeout': '15',
+        }
+      });
+      if (jinaRes.ok) {
+        const raw = await jinaRes.text();
+        const data = parseJinaResponse(raw);
+        if (data && data.text && data.text.length > 50) {
+          data.isThread = true;
+          return data;
+        }
+      }
     } catch {}
   }
   return null;
