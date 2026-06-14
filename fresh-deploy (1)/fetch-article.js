@@ -58,15 +58,16 @@ export async function onRequestPost(context) {
       } catch { return null; }
     };
 
-    const [traData, nitterData, guestData, oembedData] = await Promise.all([
+    const [traData, nitterData, guestData, oembedData, fxData] = await Promise.all([
       safeRun(() => tryThreadReaderApp(url), 100),
       safeRun(() => fetchNitterThread(url), 30),
       safeRun(() => fetchTwitterGuestApi(url), 30),
-      safeRun(() => fetchTweetOembed(url), 10),  // fast fallback for single tweets
+      safeRun(() => fetchTweetOembed(url), 10),
+      safeRun(() => fetchFxTwitter(url), 10),
     ]);
 
-    // Prefer full-thread results over oembed (which only returns one tweet)
-    const tweetResult = traData || nitterData || guestData || oembedData;
+    // Prefer full-thread results; oembed/fxtwitter are single-tweet fallbacks
+    const tweetResult = traData || nitterData || guestData || oembedData || fxData;
     if (tweetResult) {
       return new Response(JSON.stringify(tweetResult), {
         status: 200, headers: { 'Content-Type': 'application/json' }
@@ -74,26 +75,32 @@ export async function onRequestPost(context) {
     }
   }
 
-  // Strategy 3: Jina Reader proxy
+  // Last resort: Jina Reader proxy (15s timeout to stay within Cloudflare's 30s wall clock)
   try {
+    const jinaController = new AbortController();
+    const jinaTimer = setTimeout(() => jinaController.abort(), 15000);
     const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
         'Accept': 'text/plain, */*',
         'X-No-Cache': 'true',
-        'X-Timeout': '25',
-      }
+        'X-Timeout': '12',
+      },
+      signal: jinaController.signal,
     });
+    clearTimeout(jinaTimer);
     if (!jinaRes.ok) throw new Error(`Jina HTTP ${jinaRes.status}`);
     const raw = await jinaRes.text();
     const data = parseJinaResponse(raw);
-    if (!data.text || data.text.length < 100) throw new Error('Jina returned insufficient text');
+    // Tweets can be short; only enforce 100-char minimum for regular articles
+    const jinaMin = isTweet ? 10 : 100;
+    if (!data.text || data.text.length < jinaMin) throw new Error('Jina returned insufficient text');
     return new Response(JSON.stringify(data), {
       status: 200, headers: { 'Content-Type': 'application/json' }
     });
   } catch (err2) {
     return new Response(JSON.stringify({
-      error: `Could not fetch. Direct: ${directError}. Nitter: all instances failed. Jina: ${err2.message}`
+      error: `Could not fetch this content. Tried ThreadReaderApp, Nitter, Twitter API, oembed, and Jina. Last error: ${err2.message}`
     }), { status: 502, headers: { 'Content-Type': 'application/json' } });
   }
 }
@@ -462,6 +469,24 @@ function extractFromHtml(html) {
   const text = cleanText(htmlToText(body));
   const excerpt = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 220).trim() + '…';
   return { title, author, date, text, excerpt };
+}
+
+async function fetchFxTwitter(tweetUrl) {
+  const match = tweetUrl.match(/(?:twitter\.com|x\.com)\/([^/?#]+)\/status\/(\d+)/i);
+  if (!match) return null;
+  const [, username, id] = match;
+  const res = await fetch(`https://api.fxtwitter.com/${username}/status/${id}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0' }
+  });
+  if (!res.ok) return null;
+  const json = await res.json();
+  if (json.code !== 200 || !json.tweet) return null;
+  const tweet = json.tweet;
+  const text = cleanText(tweet.text || '');
+  if (!text || text.length < 5) return null;
+  const author = tweet.author?.name || tweet.author?.screen_name || '';
+  const excerpt = text.replace(/\n+/g, ' ').slice(0, 220).trim() + '…';
+  return { title: `Tweet by ${author}`, author, date: tweet.created_at || '', text, excerpt, tweetUrl, isThread: false };
 }
 
 async function fetchTweetOembed(tweetUrl) {
