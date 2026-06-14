@@ -362,8 +362,25 @@ function parseJinaResponse(raw) {
       .replace(/`([^`]+)`/g, '$1')
       .replace(/^>\s+/, '')
     )
-    .filter(l => l.trim().length === 0 || l.trim().length > 20)
+    .filter(l => {
+      const t = l.trim();
+      if (!t) return true;
+      if (t.length <= 20) return false;
+      // Strip web component CSS (Twitter's number-flow-react animated counters)
+      if (t.startsWith(':host{') || /\bnumber-flow-react\b/.test(t)) return false;
+      // Strip Twitter UI noise: timestamps, view/like counts
+      if (/^\d+:\d+\s*(AM|PM)\s*·/i.test(t)) return false;
+      if (/^\d+[KMB]?\s*(Views|Likes|Reposts|Bookmarks|Replies)$/i.test(t)) return false;
+      return true;
+    })
     .join('\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+
+  // Strip inline Twitter UI noise that can survive the line filter
+  text = text
+    .replace(/\d+[KMB]?\s*(Views|Likes|Reposts|Bookmarks|Replies)/gi, '')
+    .replace(/\d+:\d+\s*(AM|PM)\s*·[^\n]*/gi, '')
     .replace(/\n{2,}/g, '\n')
     .trim();
 
