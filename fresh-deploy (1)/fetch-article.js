@@ -42,7 +42,19 @@ export async function onRequestPost(context) {
 
   } catch (err1) {
 
-    // Strategy 2: Jina Reader proxy
+    // Strategy 2: For Twitter/X URLs, try Nitter to get the full thread without login wall
+    if (isTweetUrl(url)) {
+      try {
+        const nitterData = await fetchNitterThread(url);
+        if (nitterData && nitterData.text && nitterData.text.length > 30) {
+          return new Response(JSON.stringify(nitterData), {
+            status: 200, headers: { 'Content-Type': 'application/json' }
+          });
+        }
+      } catch {}
+    }
+
+    // Strategy 3: Jina Reader proxy
     try {
       const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
         headers: {
@@ -65,7 +77,7 @@ export async function onRequestPost(context) {
 
     } catch (err2) {
       return new Response(JSON.stringify({
-        error: `Could not fetch. Direct: ${err1.message}. Jina: ${err2.message}`
+        error: `Could not fetch. Direct: ${err1.message}. Jina: ${err2.message}. Nitter also failed.`
       }), { status: 502, headers: { 'Content-Type': 'application/json' } });
     }
   }
@@ -96,13 +108,14 @@ function htmlToText(html) {
 }
 
 function stripWebComponentCss(text) {
-  // Strip number-flow-react shadow DOM CSS injected by Twitter/X's animated counters.
-  // Pattern: :host{...}...number-flow-react...{...}NUMBER — always on one line in Jina output.
   return text
     .replace(/:host\{[^\n]*\}/g, '')
     .replace(/\bnumber-flow-react\b[^\n]*/g, '')
     .replace(/\d+[KMB]?\s*(Views|Likes|Reposts|Bookmarks|Replies)/gi, '')
-    .replace(/\d+:\d+\s*(AM|PM)\s*·[^\n]*/gi, '');
+    .replace(/\d+:\d+\s*(AM|PM)\s*·[^\n]*/gi, '')
+    .replace(/Don't miss what's happening[\s\S]*?People on X are the first to know\./gi, '')
+    .replace(/Log in\s*Sign up/gi, '')
+    .replace(/New to X\?[\s\S]*?Sign up now/gi, '');
 }
 
 function cleanText(text) {
@@ -117,6 +130,64 @@ function cleanText(text) {
 
 function isThreadReaderUrl(url) {
   return /threadreaderapp\.com\/thread\//i.test(url);
+}
+
+function isTweetUrl(url) {
+  return /(?:twitter\.com|x\.com)\/[^/?#]+\/status\/\d+/i.test(url);
+}
+
+const NITTER_INSTANCES = [
+  'nitter.privacyredirect.com',
+  'nitter.poast.org',
+  'nitter.cz',
+  'nitter.net',
+];
+
+function parseNitterThread(html) {
+  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  let title = titleMatch ? decodeHtmlEntities(titleMatch[1]).replace(/\s*\|\s*Nitter.*/i, '').trim() : '';
+
+  const authorMatch = html.match(/<a[^>]+class="[^"]*fullname[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
+  const author = authorMatch ? htmlToText(authorMatch[1]).trim() : '';
+
+  // Each tweet in a Nitter thread is in a div with class containing "tweet-content"
+  const tweetDivs = [...html.matchAll(/<div[^>]+class="[^"]*tweet-content[^"]*"[^>]*>([\s\S]*?)<\/div>/gi)];
+  const tweets = tweetDivs
+    .map(m => htmlToText(m[1]).trim())
+    .filter(t => t.length > 0);
+
+  if (tweets.length === 0) return null;
+
+  const text = cleanText(tweets.join('\n'));
+  if (text.length < 20) return null;
+
+  const excerpt = text.replace(/\n+/g, ' ').slice(0, 220).trim() + '…';
+  return { title: title || `Thread by ${author}`, author, date: '', text, excerpt, isThread: tweets.length > 1 };
+}
+
+async function fetchNitterThread(tweetUrl) {
+  const match = tweetUrl.match(/(?:twitter\.com|x\.com)\/([^/?#]+)\/status\/(\d+)/i);
+  if (!match) return null;
+  const [, username, id] = match;
+
+  for (const instance of NITTER_INSTANCES) {
+    try {
+      const nitterUrl = `https://${instance}/${username}/status/${id}`;
+      const res = await fetch(nitterUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        redirect: 'follow',
+      });
+      if (!res.ok) continue;
+      const html = await res.text();
+      const data = parseNitterThread(html);
+      if (data && data.text && data.text.length > 30) return data;
+    } catch {}
+  }
+  return null;
 }
 
 function extractThreadReader(html, url) {
