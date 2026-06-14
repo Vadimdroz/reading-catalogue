@@ -677,17 +677,26 @@ function saveGeminiKey() {
 }
 
 // AI title generation for imported tweets
+async function getGeminiModel(key) {
+  const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + key);
+  if (!r.ok) return 'gemini-2.0-flash';
+  const d = await r.json();
+  const models = (d.models || []).map(m => m.name.replace('models/', ''));
+  const preferred = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+  return preferred.find(p => models.some(m => m.startsWith(p))) || models.find(m => m.includes('flash')) || models[0] || 'gemini-2.0-flash';
+}
+
 async function generateAiTitle(articleId, tweetText, isThread) {
   const key = localStorage.getItem('gemini_key');
   if (!key || !tweetText) return;
   try {
-    // Strip tweet-number prefixes (1/, 2/, …) so they don't influence the title
     var cleanedText = tweetText.replace(/^\d+\/\s*/gm, '').trim();
     var context = isThread ? cleanedText.slice(0, 1200) : cleanedText.slice(0, 600);
     var kind = isThread ? 'Twitter thread' : 'social media post';
     var prompt = 'Write a short, meaningful title (5–8 words) for this ' + kind + '. Match the language of the post exactly — if the post is in Hebrew, write the title in Hebrew. Return ONLY the title, no quotes, no explanation:\n\n' + context;
+    const model = await getGeminiModel(key);
     const res = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + key,
+      'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + key,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -697,7 +706,11 @@ async function generateAiTitle(articleId, tweetText, isThread) {
         })
       }
     );
-    if (!res.ok) return;
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.error('Gemini title error:', res.status, err);
+      return;
+    }
     const data = await res.json();
     const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const title = raw.trim().replace(/^["'"'„«»]+|["'"'»«]+$/g, '').trim();
@@ -709,7 +722,7 @@ async function generateAiTitle(articleId, tweetText, isThread) {
       pushArticle(a);
       render();
     }
-  } catch (e) { /* silent fail — basic title already saved */ }
+  } catch (e) { console.error('generateAiTitle failed:', e); }
 }
 
 // Events
