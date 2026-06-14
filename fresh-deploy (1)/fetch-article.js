@@ -45,37 +45,46 @@ export async function onRequestPost(context) {
     }
   }
 
-  // Strategies 2-4: For Twitter/X URLs, run all approaches in parallel with a timeout
-  // (sequential would easily exceed Cloudflare's 30s request limit)
+  // For Twitter/X: try proxy sites + ThreadReaderApp in parallel, then Jina as final fallback.
+  // Proxy sites (fxtwitter, vxtwitter) render tweets server-side without a login wall.
   if (isTweet) {
-    const safeRun = async (fn, minLen) => {
-      try {
-        const result = await Promise.race([
-          fn(),
-          new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 8000))
-        ]);
-        return (result && result.text && result.text.length >= (minLen || 50)) ? result : null;
-      } catch { return null; }
-    };
+    const match = url.match(/(?:twitter\.com|x\.com)\/([^/?#]+)\/status\/(\d+)/i);
+    if (match) {
+      const [, uname, tid] = match;
+      const proxyUrls = [
+        `https://fxtwitter.com/${uname}/status/${tid}`,
+        `https://vxtwitter.com/${uname}/status/${tid}`,
+      ];
 
-    const [traData, nitterData, guestData, oembedData, fxData] = await Promise.all([
-      safeRun(() => tryThreadReaderApp(url), 100),
-      safeRun(() => fetchNitterThread(url), 30),
-      safeRun(() => fetchTwitterGuestApi(url), 30),
-      safeRun(() => fetchTweetOembed(url), 10),
-      safeRun(() => fetchFxTwitter(url), 10),
-    ]);
+      const safeJina = async (targetUrl) => {
+        try {
+          const r = await fetch(`https://r.jina.ai/${targetUrl}`, {
+            headers: { 'Accept': 'text/plain, */*', 'X-No-Cache': 'true', 'X-Timeout': '8' }
+          });
+          if (!r.ok) return null;
+          const raw = await r.text();
+          const d = parseJinaResponse(raw);
+          return (d && d.text && d.text.length > 10) ? d : null;
+        } catch { return null; }
+      };
 
-    // Prefer full-thread results; oembed/fxtwitter are single-tweet fallbacks
-    const tweetResult = traData || nitterData || guestData || oembedData || fxData;
-    if (tweetResult) {
-      return new Response(JSON.stringify(tweetResult), {
-        status: 200, headers: { 'Content-Type': 'application/json' }
-      });
+      const [p1, p2, traData, oembedData] = await Promise.all([
+        safeJina(proxyUrls[0]),
+        safeJina(proxyUrls[1]),
+        (async () => { try { return await tryThreadReaderApp(url); } catch { return null; } })(),
+        (async () => { try { const r = await fetchTweetOembed(url); return (r && r.text && r.text.length > 5) ? r : null; } catch { return null; } })(),
+      ]);
+
+      const tweetResult = traData || p1 || p2 || oembedData;
+      if (tweetResult) {
+        return new Response(JSON.stringify(tweetResult), {
+          status: 200, headers: { 'Content-Type': 'application/json' }
+        });
+      }
     }
   }
 
-  // Last resort: Jina Reader proxy (15s timeout to stay within Cloudflare's 30s wall clock)
+  // Last resort: Jina on the original URL (15s timeout)
   try {
     const jinaController = new AbortController();
     const jinaTimer = setTimeout(() => jinaController.abort(), 15000);
@@ -92,7 +101,6 @@ export async function onRequestPost(context) {
     if (!jinaRes.ok) throw new Error(`Jina HTTP ${jinaRes.status}`);
     const raw = await jinaRes.text();
     const data = parseJinaResponse(raw);
-    // Tweets can be short; only enforce 100-char minimum for regular articles
     const jinaMin = isTweet ? 10 : 100;
     if (!data.text || data.text.length < jinaMin) throw new Error('Jina returned insufficient text');
     return new Response(JSON.stringify(data), {
