@@ -333,13 +333,8 @@ function extractThreadReader(html, url) {
   const tweetUrl = handle && threadId
     ? `https://twitter.com/${handle}/status/${threadId}` : '';
 
-  // Title from og:title, strip the site suffix
-  const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
-    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
-  const pageTitle = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-  let title = decodeHtmlEntities(
-    (ogTitle && ogTitle[1]) || (pageTitle && pageTitle[1]) || ''
-  ).replace(/\s*on Thread Reader App\s*/i, '').trim() || (handle ? `Thread by @${handle}` : 'Twitter Thread');
+  // Use a clean placeholder title — the frontend will replace it with an AI title via Gemini
+  let title = handle ? `Thread by @${handle}` : 'Twitter Thread';
 
   // Strip scripts/styles/nav/etc
   let body = html
@@ -411,12 +406,6 @@ function extractThreadReader(html, url) {
 
   let text = tweetTexts.join('\n\n');
   if (!text || text.length < 100) return extractFromHtml(html);
-
-  // Use first paragraph as title if title is still generic
-  if (/^Thread by @/i.test(title)) {
-    const firstLine = text.split('\n').find(l => l.trim().length > 20);
-    if (firstLine) title = firstLine.trim().slice(0, 100) + (firstLine.length > 100 ? '…' : '');
-  }
 
   text = cleanText(text);
   const author = displayName ? `${displayName} (@${handle})` : handle ? `@${handle}` : '';

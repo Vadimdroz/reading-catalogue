@@ -480,7 +480,7 @@ async function addArticle() {
     setStatus('Saved!', 'success');
     setTimeout(function() { setStatus(''); }, 3000);
     render();
-    if (originalTweetUrl) generateAiTitle(article.id, article.text);
+    if (originalTweetUrl || data.isThread) generateAiTitle(article.id, article.text, !!data.isThread);
   } catch (err) {
     setStatus('Could not fetch this article. The site may block automated access.', 'error');
   } finally {
@@ -677,11 +677,15 @@ function saveGeminiKey() {
 }
 
 // AI title generation for imported tweets
-async function generateAiTitle(articleId, tweetText) {
+async function generateAiTitle(articleId, tweetText, isThread) {
   const key = localStorage.getItem('gemini_key');
   if (!key || !tweetText) return;
   try {
-    const prompt = 'Write a short, meaningful title (5–8 words) for this social media post. Match the language of the post exactly. Return ONLY the title, no quotes, no explanation:\n\n' + tweetText.slice(0, 600);
+    // Strip tweet-number prefixes (1/, 2/, …) so they don't influence the title
+    var cleanedText = tweetText.replace(/^\d+\/\s*/gm, '').trim();
+    var context = isThread ? cleanedText.slice(0, 1200) : cleanedText.slice(0, 600);
+    var kind = isThread ? 'Twitter thread' : 'social media post';
+    var prompt = 'Write a short, meaningful title (5–8 words) for this ' + kind + '. Match the language of the post exactly — if the post is in Hebrew, write the title in Hebrew. Return ONLY the title, no quotes, no explanation:\n\n' + context;
     const res = await fetch(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + key,
       {
