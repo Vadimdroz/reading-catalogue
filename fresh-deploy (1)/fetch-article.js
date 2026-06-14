@@ -45,12 +45,36 @@ export async function onRequestPost(context) {
     }
   }
 
-  // Strategy 2: For Twitter/X URLs, try Nitter (renders full threads without login)
+  // Strategy 2: For Twitter/X URLs, try ThreadReaderApp (works for indexed threads)
+  if (isTweet) {
+    try {
+      const traData = await tryThreadReaderApp(url);
+      if (traData && traData.text && traData.text.length > 100) {
+        return new Response(JSON.stringify(traData), {
+          status: 200, headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    } catch {}
+  }
+
+  // Strategy 3: For Twitter/X URLs, try Nitter (renders full threads without login)
   if (isTweet) {
     try {
       const nitterData = await fetchNitterThread(url);
       if (nitterData && nitterData.text && nitterData.text.length > 30) {
         return new Response(JSON.stringify(nitterData), {
+          status: 200, headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    } catch {}
+  }
+
+  // Strategy 4: For Twitter/X URLs, try Twitter's own guest API (no login required)
+  if (isTweet) {
+    try {
+      const guestData = await fetchTwitterGuestApi(url);
+      if (guestData && guestData.text && guestData.text.length > 30) {
+        return new Response(JSON.stringify(guestData), {
           status: 200, headers: { 'Content-Type': 'application/json' }
         });
       }
@@ -208,6 +232,88 @@ async function fetchNitterThread(tweetUrl) {
     } catch {}
   }
   return null;
+}
+
+async function tryThreadReaderApp(tweetUrl) {
+  const match = tweetUrl.match(/(?:twitter\.com|x\.com)\/[^/?#]+\/status\/(\d+)/i);
+  if (!match) return null;
+  const id = match[1];
+  const url = `https://threadreaderapp.com/thread/${id}`;
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    },
+    redirect: 'manual',
+  });
+  // 302 to /authenticate means the thread isn't indexed yet
+  if (res.status === 301 || res.status === 302) {
+    const loc = res.headers.get('location') || '';
+    if (loc.includes('authenticate')) return null;
+  }
+  if (res.status !== 200) return null;
+  const html = await res.text();
+  const data = extractThreadReader(html, url);
+  return (data.isThread && data.text && data.text.length > 100) ? data : null;
+}
+
+// Twitter's own bearer token (embedded in X's web app JS, used for guest/unauthenticated calls)
+const TWITTER_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I7wHoANeWDs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+
+async function fetchTwitterGuestApi(tweetUrl) {
+  const match = tweetUrl.match(/(?:twitter\.com|x\.com)\/([^/?#]+)\/status\/(\d+)/i);
+  if (!match) return null;
+  const [, username, id] = match;
+
+  // Step 1: get a guest token
+  const activateRes = await fetch('https://api.twitter.com/1.1/guest/activate.json', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${TWITTER_BEARER}` }
+  });
+  if (!activateRes.ok) return null;
+  const { guest_token } = await activateRes.json();
+  if (!guest_token) return null;
+
+  // Step 2: fetch conversation timeline (v2 guest endpoint)
+  const convRes = await fetch(
+    `https://twitter.com/i/api/2/timeline/conversation/${id}.json?count=100&tweet_mode=extended`,
+    {
+      headers: {
+        'Authorization': `Bearer ${TWITTER_BEARER}`,
+        'X-Guest-Token': guest_token,
+        'X-Twitter-Active-User': 'yes',
+        'Accept': 'application/json',
+      }
+    }
+  );
+  if (!convRes.ok) return null;
+  const json = await convRes.json();
+
+  // Extract tweets by the thread author, in order
+  const tweetsObj = json?.globalObjects?.tweets || {};
+  const usersObj  = json?.globalObjects?.users  || {};
+  const targetUser = Object.values(usersObj).find(u => u.screen_name?.toLowerCase() === username.toLowerCase());
+  const targetUid = targetUser?.id_str;
+
+  const threadTweets = Object.values(tweetsObj)
+    .filter(t => t.user_id_str === targetUid && !t.full_text?.startsWith('RT @'))
+    .sort((a, b) => a.id_str.localeCompare(b.id_str))
+    .map(t => t.full_text || t.text || '')
+    .filter(t => t.length > 0);
+
+  if (threadTweets.length === 0) return null;
+
+  const author = targetUser ? (targetUser.name || `@${username}`) : `@${username}`;
+  const text = cleanText(threadTweets.join('\n'));
+  const excerpt = text.replace(/\n+/g, ' ').slice(0, 220).trim() + '…';
+  return {
+    title: `Thread by ${author}`,
+    author,
+    date: '',
+    text,
+    excerpt,
+    isThread: threadTweets.length > 1,
+  };
 }
 
 function extractThreadReader(html, url) {
