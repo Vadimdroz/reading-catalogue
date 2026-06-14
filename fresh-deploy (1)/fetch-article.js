@@ -45,40 +45,31 @@ export async function onRequestPost(context) {
     }
   }
 
-  // Strategy 2: For Twitter/X URLs, try ThreadReaderApp (works for indexed threads)
+  // Strategies 2-4: For Twitter/X URLs, run all approaches in parallel with a timeout
+  // (sequential would easily exceed Cloudflare's 30s request limit)
   if (isTweet) {
-    try {
-      const traData = await tryThreadReaderApp(url);
-      if (traData && traData.text && traData.text.length > 100) {
-        return new Response(JSON.stringify(traData), {
-          status: 200, headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    } catch {}
-  }
+    const safeRun = async (fn, minLen) => {
+      try {
+        const result = await Promise.race([
+          fn(),
+          new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 8000))
+        ]);
+        return (result && result.text && result.text.length >= (minLen || 50)) ? result : null;
+      } catch { return null; }
+    };
 
-  // Strategy 3: For Twitter/X URLs, try Nitter (renders full threads without login)
-  if (isTweet) {
-    try {
-      const nitterData = await fetchNitterThread(url);
-      if (nitterData && nitterData.text && nitterData.text.length > 30) {
-        return new Response(JSON.stringify(nitterData), {
-          status: 200, headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    } catch {}
-  }
+    const [traData, nitterData, guestData] = await Promise.all([
+      safeRun(() => tryThreadReaderApp(url), 100),
+      safeRun(() => fetchNitterThread(url), 30),
+      safeRun(() => fetchTwitterGuestApi(url), 30),
+    ]);
 
-  // Strategy 4: For Twitter/X URLs, try Twitter's own guest API (no login required)
-  if (isTweet) {
-    try {
-      const guestData = await fetchTwitterGuestApi(url);
-      if (guestData && guestData.text && guestData.text.length > 30) {
-        return new Response(JSON.stringify(guestData), {
-          status: 200, headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    } catch {}
+    const tweetResult = traData || nitterData || guestData;
+    if (tweetResult) {
+      return new Response(JSON.stringify(tweetResult), {
+        status: 200, headers: { 'Content-Type': 'application/json' }
+      });
+    }
   }
 
   // Strategy 3: Jina Reader proxy
@@ -161,8 +152,6 @@ function isTweetUrl(url) {
 const NITTER_INSTANCES = [
   'nitter.privacyredirect.com',
   'nitter.poast.org',
-  'nitter.cz',
-  'nitter.net',
 ];
 
 function parseNitterThread(html) {
@@ -192,46 +181,27 @@ async function fetchNitterThread(tweetUrl) {
   if (!match) return null;
   const [, username, id] = match;
 
-  for (const instance of NITTER_INSTANCES) {
+  // Try all Nitter instances in parallel, each with a 4s timeout
+  const results = await Promise.all(NITTER_INSTANCES.map(async instance => {
     const nitterUrl = `https://${instance}/${username}/status/${id}`;
-
-    // Try A: direct fetch of Nitter (SSR, no JS needed)
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4000);
       const res = await fetch(nitterUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
         },
         redirect: 'follow',
+        signal: controller.signal,
       });
-      if (res.ok) {
-        const html = await res.text();
-        const data = parseNitterThread(html);
-        if (data && data.text && data.text.length > 30) return data;
-      }
-    } catch {}
-
-    // Try B: Jina on Nitter URL (in case direct fetch is IP-blocked)
-    try {
-      const jinaRes = await fetch(`https://r.jina.ai/${nitterUrl}`, {
-        headers: {
-          'Accept': 'text/plain, */*',
-          'X-No-Cache': 'true',
-          'X-Timeout': '15',
-        }
-      });
-      if (jinaRes.ok) {
-        const raw = await jinaRes.text();
-        const data = parseJinaResponse(raw);
-        if (data && data.text && data.text.length > 50) {
-          data.isThread = true;
-          return data;
-        }
-      }
-    } catch {}
-  }
-  return null;
+      clearTimeout(timer);
+      if (!res.ok) return null;
+      const html = await res.text();
+      return parseNitterThread(html);
+    } catch { return null; }
+  }));
+  return results.find(r => r && r.text && r.text.length > 30) || null;
 }
 
 async function tryThreadReaderApp(tweetUrl) {
