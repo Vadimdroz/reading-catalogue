@@ -326,7 +326,8 @@ let _auth, _db, _uid = null;
   } catch(e) { console.warn('Firebase init failed:', e); }
 })();
 
-const _isIosStandalone = /iPad|iPhone|iPod/.test(navigator.userAgent) &&
+const _isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
+const _isIosStandalone = _isIos &&
   (window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches);
 
 let _authInProgress = false;
@@ -334,14 +335,13 @@ function signIn() {
   if (!_auth || _authInProgress) return;
   _authInProgress = true;
   const provider = new firebase.auth.GoogleAuthProvider();
-  const p = _isIosStandalone
+  const p = _isIos
     ? _auth.signInWithPopup(provider)
     : _auth.signInWithRedirect(provider);
   p.catch(e => {
     _authInProgress = false;
-    // These are harmless internal Firebase signals — don't show them to the user
     if (e.code === 'auth/cancelled-popup-request' || e.code === 'auth/popup-closed-by-user') return;
-    setStatus(e.message, 'error');
+    setStatus('Sign-in error: ' + (e.code || e.message), 'error');
   });
 }
 function signOut() { if (_auth) _auth.signOut(); }
@@ -367,29 +367,46 @@ async function deleteArticleFirestore(id) {
   } catch(e) { console.warn('Firestore delete failed:', e); }
 }
 
-// On sign-in: fetch all Firestore articles and merge with local
-async function syncFromFirestore() {
+let _firestoreUnsub = null;
+let _initialSyncDone = false;
+
+// Real-time listener — keeps all devices in sync automatically
+function startFirestoreSync() {
   if (!_uid || !_db) return;
+  if (_firestoreUnsub) { _firestoreUnsub(); _firestoreUnsub = null; }
+  _initialSyncDone = false;
   setSyncState(true);
-  try {
-    const snap = await _db.collection('users').doc(_uid).collection('articles').get();
-    const remote = snap.docs.map(d => d.data());
-    // Merge: build map by id, remote wins for read/fav state, local wins for text content
-    const map = {};
-    articles.forEach(a => { map[a.id] = a; });
-    remote.forEach(r => {
-      if (map[r.id]) {
-        // Keep local text if remote lost it; take latest read/fav state
-        map[r.id] = { ...r, text: map[r.id].text || r.text || '' };
-      } else {
-        map[r.id] = r;
+  _firestoreUnsub = _db.collection('users').doc(_uid).collection('articles')
+    .onSnapshot(snap => {
+      setSyncState(false);
+      snap.docChanges().forEach(change => {
+        const r = change.doc.data();
+        if (change.type === 'added' || change.type === 'modified') {
+          const idx = articles.findIndex(a => a.id === r.id);
+          if (idx >= 0) {
+            // Keep local text if remote copy lost it; remote wins for all other fields
+            articles[idx] = { ...r, text: articles[idx].text || r.text || '' };
+          } else {
+            articles.push(r);
+          }
+        } else if (change.type === 'removed') {
+          articles = articles.filter(a => a.id !== r.id);
+          if (openCard === r.id) openCard = null;
+        }
+      });
+      // On first snapshot, upload any local articles that never made it to Firestore
+      if (!_initialSyncDone) {
+        _initialSyncDone = true;
+        const remoteIds = new Set(snap.docs.map(d => d.data().id));
+        articles.forEach(a => { if (!remoteIds.has(a.id)) pushArticle(a); });
       }
+      articles.sort((a, b) => b.id - a.id);
+      saveArticles();
+      render();
+    }, err => {
+      setSyncState(false);
+      console.warn('Firestore sync error:', err);
     });
-    articles = Object.values(map).sort((a, b) => b.id - a.id);
-    saveArticles();
-    render();
-  } catch(e) { console.warn('Firestore read failed:', e); }
-  setSyncState(false);
 }
 
 // ─── Storage ───────────────────────────────────────────────────────────────────
@@ -763,10 +780,13 @@ render();
 if (_auth) {
   document.getElementById('authOverlay').classList.add('show');
 
-  // Only process redirect result when not in iOS standalone mode (which uses popup instead)
-  if (!_isIosStandalone) _auth.getRedirectResult().catch(() => {});
+  // Only process redirect result on non-iOS (iOS uses popup to avoid Safari cookie issues)
+  if (!_isIos) _auth.getRedirectResult().catch(e => {
+    console.warn('getRedirectResult error:', e.code, e.message);
+    setStatus('Sign-in error: ' + (e.code || e.message), 'error');
+  });
 
-  _auth.onAuthStateChanged(async user => {
+  _auth.onAuthStateChanged(user => {
     if (user) {
       _uid = user.uid;
       document.getElementById('authOverlay').classList.remove('show');
@@ -776,9 +796,10 @@ if (_auth) {
         const nameEl = document.getElementById('userName');
         if (nameEl) nameEl.textContent = user.displayName || user.email || '';
       }
-      await syncFromFirestore();
+      startFirestoreSync();
     } else {
       _uid = null;
+      if (_firestoreUnsub) { _firestoreUnsub(); _firestoreUnsub = null; }
       document.getElementById('authOverlay').classList.add('show');
       const userRow = document.getElementById('userRow');
       if (userRow) userRow.style.display = 'none';
