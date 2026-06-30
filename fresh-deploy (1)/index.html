@@ -780,8 +780,10 @@ render();
 if (_auth) {
   document.getElementById('authOverlay').classList.add('show');
 
-  // Only process redirect result on non-iOS (iOS uses popup to avoid Safari cookie issues)
-  if (!_isIos) _auth.getRedirectResult().catch(e => {
+  // Always call getRedirectResult: on iOS, signInWithPopup opens as a new tab and
+  // Firebase redirects back to the app (no window.opener), so the result lands here.
+  _auth.getRedirectResult().catch(e => {
+    if (e.code === 'auth/no-auth-event' || e.code === 'auth/null-user') return;
     console.warn('getRedirectResult error:', e.code, e.message);
     setStatus('Sign-in error: ' + (e.code || e.message), 'error');
   });
