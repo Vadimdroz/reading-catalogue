@@ -1,4 +1,4 @@
-const CACHE = 'rc-v4';
+const CACHE = 'rc-v5';
 const SHELL = ['/', '/index.html'];
 
 self.addEventListener('install', e => {
@@ -14,7 +14,9 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // Don't intercept Netlify function calls
+  // Let the browser handle Firebase auth flow natively — SW interception
+  // breaks the redirect chain by following redirects internally
+  if (e.request.url.includes('/__/auth/')) return;
   if (e.request.url.includes('/.netlify/')) return;
 
   e.respondWith(
