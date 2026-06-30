@@ -326,21 +326,13 @@ let _auth, _db, _uid = null;
   } catch(e) { console.warn('Firebase init failed:', e); }
 })();
 
-const _isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
-const _isIosStandalone = _isIos &&
-  (window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches);
-
 let _authInProgress = false;
 function signIn() {
   if (!_auth || _authInProgress) return;
   _authInProgress = true;
   const provider = new firebase.auth.GoogleAuthProvider();
-  const p = _isIos
-    ? _auth.signInWithPopup(provider)
-    : _auth.signInWithRedirect(provider);
-  p.catch(e => {
+  _auth.signInWithRedirect(provider).catch(e => {
     _authInProgress = false;
-    if (e.code === 'auth/cancelled-popup-request' || e.code === 'auth/popup-closed-by-user') return;
     setStatus('Sign-in error: ' + (e.code || e.message), 'error');
   });
 }
@@ -780,8 +772,6 @@ render();
 if (_auth) {
   document.getElementById('authOverlay').classList.add('show');
 
-  // Always call getRedirectResult: on iOS, signInWithPopup opens as a new tab and
-  // Firebase redirects back to the app (no window.opener), so the result lands here.
   _auth.getRedirectResult().catch(e => {
     if (e.code === 'auth/no-auth-event' || e.code === 'auth/null-user') return;
     console.warn('getRedirectResult error:', e.code, e.message);

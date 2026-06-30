@@ -1,4 +1,4 @@
-const CACHE = 'rc-v2';
+const CACHE = 'rc-v4';
 const SHELL = ['/', '/index.html'];
 
 self.addEventListener('install', e => {
